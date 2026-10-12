@@ -1,0 +1,327 @@
+THEATRE SOUND CUE PLAYER
+Program Prompt Version 0.1
+
+Version: 0.1
+Specification date: October 7, 2026
+Status: Canonical merged requirements
+Source: Uploaded Program Prompt.txt and approved changes in Create Sound Cue Prompt
+Artifact: Program Prompt Version 0.1.txt
+
+1. PURPOSE AND DEVELOPMENT DIRECTIVE
+
+Build a Windows theatrical sound cue player that behaves like a sound equivalent of a theatrical lighting console. The operator must be able to build a cue set for a play, run it reliably during a performance, deliberately overlap sounds, and recover from navigation mistakes without accidental playback.
+
+Use this document as the canonical GitHub Copilot implementation specification. The requirements below replace conflicting earlier descriptions, particularly the rule that every cue waits for playback completion before the next cue is armed. Advance Mode now controls that behavior independently for each PLAY SOUND cue.
+
+Preserve the terminology Cue, Selected Cue, Active/Armed Cue, Playing Cue, Completed Cue, Playing Stack, GO, Back, ARM CUE, cue set, play, and play folder. Reliability and clear live operation take priority over elaborate graphics. All required capabilities in this specification belong to Version 0.1; implementation stages are not permission to omit them. Features marked 'if practical' or 'preferably' are enhancements rather than prerequisites.
+
+2. TERMINOLOGY AND STATE MODEL
+
+A Cue is an instruction executed when GO is pressed; it is not necessarily an audio file.
+
+Selected Cue: A cue the operator has clicked or navigated to. Selection does not arm or execute it.
+Active/Armed Cue: The single cue occupying the execution pointer. When it is ARMED and ready, it is the only cue GO can execute. During an On Complete wait, the pointer remains on the triggered cue, but that cue is PLAYING and is not eligible for another GO.
+Playing Cue: A PLAY SOUND cue with a sound instance currently playing or fading. Multiple sounds may play simultaneously.
+Completed Cue: A cue whose playback or action has finished. A sound stopped before its natural end must be distinguishable from one that completed naturally.
+Playing Stack: The visual collection of all active sound instances, ordered with the most recently triggered sound first. It need not implement a strict programming LIFO stack.
+
+Keep cue navigation, execution history, and active sound instances separate internally. A cue can have been successfully triggered while its sound continues playing and a later cue is armed. An explicit re-arm permits replay; it must not erase or confuse an already playing instance of that cue.
+
+The operator must always be able to tell at a glance:
+- Which sounds are playing?
+- How far through each sound are we?
+- Which sounds are looping?
+- Which cue action will execute if GO is pressed?
+
+3. GO AND CUE ADVANCEMENT
+
+The large GO button and Spacebar execute exactly the same action. GO executes only the Armed Cue. Selecting a row must never cause playback. Arming a cue must never cause playback. Advancing the pointer must never automatically execute the next cue.
+
+Every PLAY SOUND cue must have an explicit Advance Mode:
+
+On Complete:
+- On successful GO, start playback, change the cue to PLAYING, and keep the execution pointer on that cue.
+- Do not arm the next cue while this sound is playing.
+- Disable repeat triggering of this cue unless the operator explicitly re-arms it.
+- When the sound reaches its natural end, including a configured End Position, mark it COMPLETE, advance to the next cue in performance order, and arm that cue.
+- Another GO is always required to execute the newly armed cue.
+
+On GO / Trigger:
+- After the cue successfully starts, record it as triggered, leave its sound in the Playing Stack, advance the pointer immediately, and arm the next cue.
+- The triggered sound continues independently until it finishes, is stopped, or is faded out.
+- Its later completion must not move the pointer again.
+- This mode permits the operator to consciously overlap sounds by pressing GO for later cues.
+
+A failed action must show an error and must not silently advance or be marked successfully triggered. If no cue is armed or preparation/output is unavailable, GO must be unavailable with a visible reason. At the end of the cue list, show that there is no next cue; never wrap automatically.
+
+Operational consistency rules:
+- Back or explicit ARM CUE takes precedence over pending automatic advancement. Completion of an older sound must not replace a cue the operator has subsequently armed.
+- If an On Complete sound is manually stopped or faded out before its natural end, release its playback wait but leave navigation under operator control through Back or ARM CUE. Do not silently treat interruption as natural completion.
+- STOP ALL used as an emergency control stops audio without executing another cue or changing the armed cue. After STOP ALL interrupts an On Complete wait, nothing remains armed; the operator must deliberately select and arm the next cue before GO becomes available again.
+
+4. CUE ACTION TYPES
+
+Support these initial action types, using the short labels PLAY, STOP, FADE, and STOP ALL where appropriate:
+
+PLAY SOUND (PLAY): Start an audio file using its cue properties, Advance Mode, and On GO Audio Behavior.
+STOP SOUND (STOP): Immediately stop a designated playing sound.
+FADE SOUND (FADE): Fade a designated playing sound to silence over the specified duration, then stop it.
+STOP ALL: Immediately stop every active sound and clear the Playing Stack. Provide this both as a cue action and as a permanent emergency control.
+
+STOP and FADE cues must reference a valid PLAY SOUND cue using a stable internal reference that survives display-identifier changes and reordering. If explicit replay creates more than one active instance of that target cue, apply the action to all its active instances. Individual stack controls act on only their displayed instance. A valid target with no active sound is a visible no-op, not an invalid file error.
+
+STOP and STOP ALL cue actions complete immediately after their action and then arm the next cue. A FADE cue completes when its specified fade finishes, then arms the next cue. If its valid target is not playing, it completes as a no-op. These are action-completion rules; the two selectable Advance Modes above apply to PLAY SOUND cues. None of these actions automatically executes the next cue.
+
+5. PLAY SOUND CUE CONFIGURATION
+
+Each PLAY SOUND cue supports:
+- Cue Identifier, stored as text.
+- Cue Name.
+- Notes / Description.
+- Audio File, referenced relative to the play folder.
+- Volume.
+- Fade-In Duration.
+- Fade-Out Duration.
+- Loop: Off or On.
+- Advance Mode: On Complete or On GO / Trigger.
+- On GO Audio Behavior: one of the three options below.
+- Optional Start Position.
+- Optional End Position.
+
+Start and End Positions allow a section of a longer file to be used without modifying the source audio. An omitted Start Position means the beginning; an omitted End Position means the file's end. Require 0 <= Start < End <= file duration. Durations must be nonnegative. Zero fade duration means immediate gain change/stop. Display volume units clearly and validate values against the supported range.
+
+Fade in applies at playback start. Configured fade out is available to individual FADE OUT controls and should apply at the end of finite playback where feasible within the selected segment. Where automatic end fade-out is not applied, the sound simply plays to its End Position and stops at full cue volume; no partial or abrupt gain reduction may occur before that point. FADE action cues supply their own duration. Apply volume and fades to the actual audio signal, independently for each playing sound.
+
+On GO Audio Behavior is independent of Advance Mode:
+
+Add Sound to Playing Stack:
+Leave all currently playing sounds running, start this sound, and add it to the Playing Stack.
+
+Stop Previous and Add to Playing Stack:
+Stop the most recently triggered sound that is still active, start this sound, and add it to the Playing Stack. Older active sounds continue. If no sound is active, simply start this sound.
+
+Stop All and Add to Playing Stack:
+Stop every active sound, clear those stack entries, start this sound, and add it to the Playing Stack.
+
+Do not stop existing audio merely because GO was pressed. Only the configured behavior or an explicit STOP/FADE/STOP ALL action authorizes that effect. Check that the new sound and output are ready before applying its destructive On GO behavior. Report any start failure clearly.
+
+6. AUDIO FORMAT SUPPORT
+
+PCM WAV is the preferred show format and must be fully supported. MP3, AAC, and FLAC must also be supported for playback.
+
+Compressed formats must not compromise timing accuracy: looping, Start/End Positions, and progress display must behave correctly for every supported format. Where a compressed format cannot guarantee sample-accurate segment boundaries or seamless looping, warn the operator and recommend converting that file to WAV for performance use.
+
+Files of different sample rates, bit depths, and channel counts (mono or stereo) must coexist in the Playing Stack and be resampled and mixed correctly to the selected output device.
+
+Each sound has a relative playback level (its cue volume), applied relative to the Master Output Level described in Section 6A.
+
+6A. MASTER OUTPUT LEVEL
+
+Provide a single Master Output Level control that applies to the final mixed output of all playing sounds, including TEST audition audio.
+
+Each cue's volume is a relative level within the mix; the Master Output Level scales the combined result before it is sent to the selected Windows audio device. Level meters reflect the post-master signal being sent by the application.
+
+The Master Output Level must be available in both Edit Mode and Show Mode, and changing it must never interrupt or restart playing audio. Remember the setting per play and display it in Show Mode.
+
+7. LOOPING
+
+Loop Off plays the configured segment once. Loop On repeats that segment continuously until stopped or faded, keeping its instance in the Playing Stack.
+
+Loop On combined with Advance Mode On Complete is invalid because an indefinitely looping sound never naturally completes. Flag this during validation and block entering Show Mode until corrected. The usual ambience configuration is Loop On with On GO / Trigger.
+
+For loops, show LOOPING, total elapsed playback time, and progress through the current iteration. Do not show a misleading finite remaining time for the entire looping sound. A fade-in occurs when the sound initially starts; do not repeatedly apply start/end fades on every loop unless explicitly implemented as an additional setting.
+
+8. PLAYING STACK AND INDIVIDUAL CONTROLS
+
+Show every active sound with the most recently triggered sound at the top. Keep fading sounds visible until they stop. Remove finished/stopped instances from the active stack while preserving their cue execution status.
+
+Each entry shows:
+- Cue number and Cue Name.
+- PLAYING or FADING status, and LOOPING when applicable.
+- Horizontal playback progress and moving playhead.
+- Waveform if practical.
+- Elapsed time, total segment duration, and remaining time when applicable.
+- Real-time audio level indication, preferably separate Left and Right meters for stereo.
+- STOP and FADE OUT controls.
+
+STOP immediately stops only that instance. FADE OUT fades only that instance to silence and stops it, using its configured fade-out duration or an explicitly chosen duration. Other sounds continue unaffected. PAUSE need not be prominent in Show Mode; it may be offered in Edit Mode/rehearsal.
+
+The Armed Cue must remain visually separate from the Playing Stack. A stack is required for simultaneous playback in this version, rather than merely anticipating overlap in a future version.
+
+9. PLAYBACK VISUALIZATION AND METERING
+
+At minimum provide a horizontal progress bar representing the playable duration. A five-second sound must take approximately five seconds for the playhead to cross it. Display elapsed time and total duration, such as 00:03.2 / 00:05.0, plus remaining time where meaningful.
+
+Update smoothly at roughly 20-30 updates per second without unnecessary CPU usage. Drive progress from actual playback position rather than an unrelated display timer.
+
+If practical, display the file's waveform inside the playback bar. The full waveform represents the full source file; when Start/End Positions are used, clearly mark the playable segment and relate its playhead to the correct source position. Waveform editing is not required in Version 0.1. Waveforms should help identify loud portions, quiet portions, pauses, upcoming events, and approaching completion. Generate/cache them at load or preparation time rather than recomputing continuously. Store waveform caches inside the play folder so they survive copying the folder to another computer without needing to be rebuilt.
+
+Meters represent the actual application audio signal after cue volume and fades, not just the volume setting. Respond quickly, fall naturally, and show silence when no signal is present. Prefer separate Left and Right meters for stereo. Use a decibel-style scale if supported, for example -60, -48, -36, -24, -12, -6, 0 dBFS. Exact professional metering standards are not required.
+
+If practical, show near-clipping warnings and peak/clipping indications. Monitoring must never automatically change volume. Meters confirm signal production inside the application; they must not be presented as proof that physical speakers are connected or audible. Reliability takes priority over detailed waveform graphics.
+
+10. MAIN PERFORMANCE DISPLAY
+
+Show Mode prominently displays:
+- Play name and loaded cue-set version.
+- Playing Stack with individual progress, meters, STOP, and FADE OUT.
+- Extremely prominent ARMED cue number, name, and action type.
+- Large GO button.
+- Permanent STOP ALL emergency control.
+- Cue list and clear selected/armed/playing/completed distinctions.
+- Back and ARM CUE navigation.
+- Master Output Level and its current value.
+- Selected Windows audio output device and output/engine readiness.
+- Visible errors, warnings, or a reason GO is unavailable.
+
+For STOP or FADE cues, make the target and fade duration visible so the operator knows what GO will do. When waiting for On Complete, show that wait rather than falsely displaying the playing cue as ready for another GO. The operator should understand current show state in a glance lasting less than a second.
+
+11. BACK, MANUAL NAVIGATION, AND RE-ARMING
+
+Back moves the Active/Armed Cue to the previous cue in performance order and does not play it. It must not stop existing audio automatically. At the top of the cue list, Back is a visible no-op.
+
+A single mouse click selects any cue. An explicit ARM CUE button or shortcut arms the selected cue. This must work for earlier cues already played or skipped as well as later cues. Re-arming resets that cue's execution eligibility from COMPLETE or triggered to ARMED so it can be executed again, without altering an existing sound instance. Playback still requires GO.
+
+Example: The show has reached Cue 12.3. Click Cue 12.0, press ARM CUE, then press Spacebar to execute Cue 12.0 again. Clicking it alone does nothing to audio.
+
+Explicit navigation cancels pending pointer advancement from an older execution. Prevent a second trigger from ordinary repeated input unless a cue has been explicitly re-armed or the pointer has advanced to another ready cue.
+
+12. CUE MANAGEMENT AND SCRIPT-PAGE NUMBERING
+
+In Edit Mode, allow adding cues anywhere, removing cues with a confirmation prompt, updating all cue properties, assigning audio, and rearranging performance order. When removing a cue that is the target of any STOP or FADE cue, warn the operator at the time of deletion, naming each affected cue, before the confirmation is accepted. Editing a cue that is not currently playing must never interrupt already playing audio. Active instances retain the settings with which they started; edits apply to subsequent playback.
+
+Cue numbers follow script pages:
+12.0 = first sound cue on script page 12.
+12.1 = second sound cue on script page 12.
+12.2 = third sound cue on script page 12.
+47.0 = first sound cue on script page 47.
+
+Allow identifiers such as 12.0, 12.1, 12.10, 12.11, 47.2, 47.21, and 47.23. Store identifiers as TEXT, never floating-point numbers. Preserve the exact entered representation; 12.10 must never become 12.1. Validate identifiers for the script-page convention and uniqueness within a cue set.
+
+Maintain an independent performance sequence/order. Keep the list in that order rather than relying on floating-point or ordinary text sorting. Adding an identifier between existing identifiers must not unexpectedly reorder the performance; provide explicit placement/reordering.
+
+13. EDIT MODE, SHOW MODE, AND AUDITION / TEST
+
+Edit Mode permits adding/removing/updating/reordering cues, assigning files, configuring properties, and auditioning. Show Mode locks normal structural and cue-property editing while keeping GO, ARM CUE, Back, STOP, FADE OUT, STOP ALL, and the Master Output Level available. Save remains available in Show Mode; like every permanent save, it creates a new history version without interrupting audio.
+
+Preserve the original ability to maintain cues without interrupting a performance's audio: the operator may deliberately leave Show Mode for Edit Mode while active sounds continue. Switching modes or editing a nonplaying cue must not stop or restart those sounds. Revalidate relevant changes before returning to Show Mode. Do not permit ordinary accidental editing directly in Show Mode.
+
+Provide an AUDITION or TEST action in Edit Mode for the selected PLAY SOUND cue. It plays the configured sound without changing the Armed Cue, completion states, or show sequence position. Clearly label audition playback TEST and provide a stop control. Audition playback shows the same progress display and level metering as performance playback, with its level subject to the Master Output Level. Isolate audition from performance advancement and do not apply its cue's Stop Previous/Stop All performance behavior. STOP ALL must also stop audition audio. Test playback uses the deliberately selected output device and obeys output-loss rules.
+
+14. KEYBOARD AND TRIGGER SAFETY
+
+Spacebar executes GO only in the appropriate Show context. One physical press can execute only one GO. Ignore keyboard auto-repeat; another GO requires release and a fresh press. Apply equivalent protection to other triggering shortcuts and prevent duplicate/reentrant execution while an action is being accepted.
+
+When focus is in a text-editing control, Spacebar enters a space and must not execute GO. Modal dialogs and inappropriate application contexts must not trigger the show. Keep selection, arming, and execution distinct for keyboard and mouse operation.
+
+15. AUDIO ENGINE, PRELOADING, AND WINDOWS OUTPUT
+
+Support simultaneous playback, independent gains/fades/stops, configured segments, looping, and responsive controls. Playback after GO should begin with minimal perceptible latency. Preload or buffer upcoming audio where practical; at minimum the Armed Cue must be prepared for immediate playback.
+
+Loading, decoding, validation, and waveform generation must not freeze the interface, delay GO once a cue is ready, or interrupt sounds already playing. Show preparation status and do not claim an unprepared cue is ready. Use bounded buffering suitable for large files instead of assuming every file fits in memory.
+
+Allow deliberate selection of an available Windows audio output device, including USB interfaces, headphones, HDMI, and installed outputs. Remember that choice for the show/application as appropriate and display the actual active device in Show Mode. Identify the device persistently rather than relying on a changing list position.
+
+If the selected device is missing at load or disappears during playback:
+- Immediately show AUDIO OUTPUT LOST with the device name.
+- Disable GO and show that playback cannot be relied upon.
+- Do not silently switch to another Windows device or the Windows default output.
+- Require deliberate operator selection of a replacement and successful engine preparation before GO becomes available.
+- Show affected sounds' actual state; do not claim they remain audible.
+- Do not automatically replay missed cues or resume sound on reconnection. Require deliberate operator action.
+
+16. PLAY FOLDERS AND AUDIO IMPORT
+
+Each play has its own folder containing saved cue-set versions, audio files, and related assets. Example:
+
+Plays/Clue/
+  Clue - 10-4-2026 19-02-11.cueset
+  Clue - 10-5-2026 21-17-44.cueset
+  Clue - 10-6-2026 23-48-35.cueset
+  audio/doorbell.wav
+  audio/thunder.wav
+  audio/rain.wav
+
+Opening a play opens its folder and provides the most recent saved cue set, full version history, and referenced audio assets. Allow explicitly opening an older version.
+
+When assigning an audio file from outside the play folder, automatically copy it into the play's audio folder, use that copy as the source, and store its path relative to the play folder. Example: C:/Users/User/Downloads/thunder.wav becomes Plays/Clue/audio/thunder.wav with cue reference audio/thunder.wav.
+
+Avoid duplicate copies of an already imported source where practical. Handle filename collisions without overwriting a different existing asset. A failed copy must not leave a cue falsely configured as ready. Keep imported assets intact so older cue-set versions continue to work. Copying or moving the entire play folder to another computer must preserve audio references; output device selection must be checked again on that computer.
+
+17. SAVING CUE SETS AND NEVER-OVERWRITE HISTORY
+
+A complete production cue list is saved as a cue set named after its theatrical play. Each permanent save records the play name, save date/time, complete cue list, identifiers, names, action types, audio references, all settings, target references, and performance order.
+
+Example display: Clue - 10/6/2026 23:48:35.
+
+Saving must NEVER overwrite a previous permanent save. Every Save creates a new history version, including saves made after opening or restoring an older version. Ensure unique version filenames even if more than one save occurs within a second.
+
+The operator can view the full dated history, open any prior version, restore it, or continue editing from it. Historical versions remain unchanged. A failed save must be visible and must not be reported as successful. Write saved data safely so interruption does not replace a valid version with an incomplete file.
+
+18. RECOVERY AUTOSAVE
+
+Recovery autosave is separate from permanent history. Maintain an automatic recovery copy after meaningful edits without creating clutter in the user-visible permanent version list or overwriting historical saves.
+
+After an abnormal shutdown, if newer unsaved recovery data exists, offer Restore Recovery or Open Last Saved Version, showing the play and recovery timestamp. Restoring recovery must not trigger audio. A subsequent permanent Save creates a new historical version. Show any failure to maintain recovery data and distinguish unsaved/recovered edits from the last permanent save.
+
+19. LOAD-TIME SANITY CHECK AND VALIDATE SHOW
+
+Run a sanity check whenever a show or historical version is opened, and provide an explicit Validate Show action. Recheck changed requirements before entering Show Mode.
+
+Check at minimum:
+- Every PLAY SOUND cue has an assigned file.
+- Every referenced file exists, can be opened/decoded, and has a determinable duration.
+- Relative audio references resolve within the intended production assets.
+- Cue identifiers are valid and unique.
+- Performance order and stable cue references are valid.
+- STOP/FADE targets reference valid PLAY SOUND cues.
+- Volume, fade durations, and Start/End Positions are valid.
+- Loop On is not combined with On Complete.
+- The selected output device exists and the engine can use it.
+- Required playback preparation is ready, particularly for the Armed Cue.
+
+Report issues clearly with cue identifier, description, and corrective context. Non-PLAY cues do not require audio files. A target that is not currently playing is not a load-time validation error.
+
+Critical errors such as missing/unreadable required audio, invalid targets, invalid segments, unavailable output, or Loop plus On Complete prevent entering Show Mode until corrected. Warnings remain prominent; they must not disappear silently. Do not label a show SHOW READY while blocking checks or required preparation remain unresolved.
+
+20. PRE-SHOW STATUS
+
+After loading and validation, show a Pre-Show Status display before Show Mode. Include play/version, cue count, verified audio count, cue numbering/reference status, selected device connection, audio engine/preparation readiness, and recovery/unsaved state. List warnings and errors with affected cues.
+
+Example:
+CLUE
+74 cues loaded
+41 audio files verified
+All cue references valid
+USB Audio Interface connected
+Audio engine ready
+Recovery state clean
+SHOW READY
+[ ENTER SHOW MODE ]
+
+These are example values, not fixed program data. Significant warnings must be visible before proceeding; critical failures block entry. A volume setting alone does not prove clipping and should not automatically be treated as a critical failure.
+
+21. IMPLEMENTATION ORDER AND ACCEPTANCE SCENARIOS
+
+Implement in manageable stages: cue data/storage and history; reliable audio/output handling; cue execution and advancement; live controls/Playing Stack; editing/import/audition; validation/recovery; visualization polish. Keep the complete Version 0.1 requirements as the delivery scope. Editable waveforms, automatic-follow playback, WAIT, MIDI, and other future action types are not required.
+
+Verify the following observable behavior:
+- A finite On Complete cue arms the next cue only at natural completion; that cue remains silent until GO.
+- An On GO / Trigger rain cue continues while a later thunder cue is deliberately triggered.
+- Each On GO Audio Behavior affects exactly the specified previous sounds.
+- A loop remains active until stopped/faded; Loop plus On Complete blocks Show Mode.
+- Individual STOP/FADE OUT affects only the displayed instance; STOP/FADE cues target the designated cue; STOP ALL stops everything.
+- Back and ARM CUE enable replay without starting audio by selection or letting old completions override navigation.
+- A five-second sound's progress crosses in approximately five seconds; meters follow actual signal, fades, and the Master Output Level.
+- The Master Output Level scales all playing and auditioned sounds without interrupting audio, and per-cue levels remain relative to it.
+- Holding Spacebar executes one GO; typing in a field executes none.
+- Identifiers 12.1 and 12.10 remain distinct after save/load, and performance order remains stable.
+- MP3, AAC, and FLAC files play with correct timing alongside PCM WAV; mixed sample rates and channel counts mix correctly.
+- Imported audio stays playable after copying the whole play folder to another computer, subject to deliberate output selection.
+- Missing audio/output and invalid references are reported before performance; output loss never silently redirects audio.
+- Every permanent Save creates a new version; restoring an old version preserves all existing history.
+- Recovery restores unsaved edits without audio playback or overwriting permanent versions.
+- TEST leaves arming, completion states, and show position unchanged.
+- Deliberate editing of a nonplaying cue and mode switches do not interrupt existing audio.
+
+END OF PROGRAM PROMPT VERSION 0.1

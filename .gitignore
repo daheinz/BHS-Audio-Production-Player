@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build artifacts (PyInstaller / setuptools)
+build/
+dist/
+*.spec.bak
+
+# Runtime content: play folders, audio assets, cue-set versions, recovery data
+# (user show data — remove this line if you want to commit shows)
+Plays/
+plays/
+
+# OS noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor local settings
+# .vscode/

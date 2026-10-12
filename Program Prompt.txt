@@ -1,0 +1,401 @@
+Yes. I’d add **two different visualizations** because they tell the operator different things:
+
+1. **Playback progress / waveform** tells them *where they are in the sound*.
+2. **Level meter** tells them *whether audio is actually being produced and how loud it is*.
+
+For a five-second gunshot sequence, for example, the operator should be able to glance over and see the playhead racing toward the end. For a three-minute rain effect, they can immediately tell there is still plenty left.
+
+I’ve folded that into the requirements:
+
+## Cue State and Operation
+
+The application should distinguish between the **active/armed cue** and a sound that has been triggered.
+
+Only one cue is considered the **Active Cue** at a time.
+
+The Active Cue is the cue that will execute when the operator presses GO.
+
+The normal workflow is:
+
+1. A cue is displayed as **ARMED**.
+2. The operator presses the large GO button or presses the Spacebar.
+3. The armed cue is triggered and its audio begins playing.
+4. While it is playing, clearly show that cue as **PLAYING**.
+5. When the sound reaches the end of the audio file, mark that cue as completed.
+6. Automatically advance to the next cue in the cue list.
+7. The next cue becomes **ARMED** and waits for the operator to press GO.
+
+Example:
+
+Cue 12.0 - Doorbell - ARMED
+
+Operator presses Spacebar.
+
+Cue 12.0 - Doorbell - PLAYING
+
+The doorbell audio finishes.
+
+Cue 12.0 - COMPLETE  
+Cue 12.1 - Thunder - ARMED
+
+The program must NOT automatically play Cue 12.1. It only becomes armed.
+
+The operator must press GO or Spacebar again to trigger Cue 12.1.
+
+## Important Cue Rules
+
+Selecting a cue is not the same thing as triggering it.
+
+The application should have these separate concepts:
+
+- **Selected Cue** - a cue the user has clicked or navigated to
+- **Armed/Active Cue** - the cue that GO will trigger
+- **Playing Cue** - a cue whose audio is currently playing
+- **Completed Cue** - a cue that has finished playing
+
+The interface should make these states visually obvious.
+
+Most importantly, the operator should always be able to answer three questions with a glance:
+
+**What sound is playing now?**
+
+**How far through that sound are we?**
+
+**What sound will play if I press GO?**
+
+## GO Behavior
+
+GO and Spacebar should only trigger the Armed Cue.
+
+Pressing GO should never accidentally trigger a cue merely because the user clicked on it in the cue list.
+
+When an armed cue is triggered:
+
+- change its status from ARMED to PLAYING
+- begin audio playback
+- disable triggering that same cue a second time unless explicitly reset
+- display its playback progress
+- display its current audio level
+- wait for playback to complete
+- then arm the next cue
+
+## Playback Visualization
+
+For every currently playing sound, show a clear visual representation of its playback.
+
+At minimum, provide a **horizontal progress bar** representing the entire duration of the sound.
+
+Example:
+
+A 5-second sound should take approximately 5 seconds for the progress indicator to travel from the left side to the right side.
+
+Display:
+
+- elapsed time
+- total duration
+- remaining time if practical
+- moving playback position/playhead
+
+Example:
+
+`00:03.2 / 00:05.0`
+
+or
+
+`3.2 sec remaining`
+
+The progress display should update smoothly enough that the operator can visually judge when a sound is about to finish.
+
+A refresh rate around 20-30 updates per second is sufficient. Do not consume unnecessary CPU resources just to animate the display.
+
+## Waveform Display
+
+If practical, display the waveform of the audio file inside the playback bar.
+
+The entire waveform should represent the entire sound file.
+
+A moving playhead should travel across the waveform during playback.
+
+Example concept:
+
+`|██▃▂▅████▆▃▂──────|`
+
+with a vertical playhead showing the current playback location.
+
+This waveform does not need to be editable in the first version.
+
+Its primary purpose is to let the operator visually recognize:
+
+- loud portions
+- quiet portions
+- pauses
+- upcoming sound events
+- when the cue is approaching completion
+
+Generating the waveform may occur when the audio file is loaded rather than continuously during playback.
+
+Reliability is more important than detailed waveform graphics.
+
+## Audio Level Meter
+
+Provide a real-time audio level indicator for every sound that is currently playing.
+
+This should behave similarly to a level meter on a mixing console.
+
+Preferably provide separate:
+
+- Left channel
+- Right channel
+
+meters for stereo audio.
+
+The level meter should represent the **actual audio signal being sent by the application**, not simply the cue's volume setting.
+
+The meter should:
+
+- respond quickly to changes in audio level
+- fall naturally when the sound becomes quieter
+- show silence when no signal is present
+- make it visually obvious that the application is actively producing audio
+
+Use a decibel-style scale if supported by the audio library.
+
+For example:
+
+`-60  -48  -36  -24  -12  -6  0 dB`
+
+Exact professional metering standards are not required for Version 1.
+
+The goal is to give the operator immediate confirmation:
+
+**Yes, this cue is actually producing sound.**
+
+## Peak / Clipping Indicator
+
+If practical, indicate when audio approaches or reaches digital clipping.
+
+For example:
+
+- normal meter movement for typical levels
+- warning near 0 dBFS
+- peak indicator if clipping occurs
+
+This is a monitoring feature only.
+
+Do not automatically change the sound volume.
+
+## Playing Cue Display
+
+The main PLAYING section should combine the important playback information.
+
+Example:
+
+**PLAYING**
+
+Cue 12.0  
+Rain Outside Mansion
+
+`01:37 / 03:15`
+
+`[ waveform ==================|============== ]`
+
+Left:  `██████████░░░░`  
+Right: `█████████░░░░░`
+
+Below this, prominently show:
+
+**ARMED**
+
+Cue 12.1  
+Front Doorbell
+
+[ **GO** ]
+
+This allows the operator to see both what is happening now and what will happen next.
+
+## Multiple Playing Sounds
+
+The architecture should anticipate that more than one sound may eventually play simultaneously.
+
+If multiple sounds are playing:
+
+- each active sound should have its own playback progress
+- each should show its own remaining duration
+- each should have its own level indication
+- the ARMED cue should remain visually separate from all currently playing sounds
+
+Do not allow multiple playing sounds to make the interface confusing.
+
+The currently ARMED cue must always remain easy to identify.
+
+## Back
+
+The Back command should move the Active/Armed Cue to the previous cue.
+
+Back should NOT automatically play the previous cue.
+
+This makes it possible for an operator to recover if they accidentally advance too far.
+
+## Manual Navigation
+
+The operator should also be able to manually arm a specific cue.
+
+For safety:
+
+1. Select the desired cue.
+2. Use an explicit **ARM CUE** command.
+3. The selected cue becomes the Active/Armed Cue.
+4. GO or Spacebar will then trigger it.
+
+Simply clicking a cue must never play it.
+
+## Mouse Select and Arm
+
+The operator must be able to use the mouse to select **and** arm any cue in the cue list, including a **previous** cue that has already been played or skipped.
+
+Required behavior:
+
+1. A single mouse click on any cue in the cue list makes it the **Selected Cue**.
+2. While a cue is selected, an explicit **ARM CUE** action (such as an ARM CUE button or a keyboard shortcut) makes that cue the new Active/Armed Cue.
+3. This must work for cues **earlier** in the list just as well as cues later in the list, allowing the operator to go back and re-arm a previous cue at any time.
+4. Re-arming a previous cue resets its status from COMPLETE back to ARMED so it can be triggered again.
+5. Mouse selection alone must **never** trigger playback. Playback still requires pressing GO or Spacebar.
+
+Example:
+
+The show has advanced to Cue 12.3, but the operator needs to go back to Cue 12.0.
+
+The operator clicks Cue 12.0 to select it.
+
+The operator presses the ARM CUE button.
+
+Cue 12.0 becomes ARMED.
+
+The operator presses Spacebar and Cue 12.0 plays again.
+
+## Cue Management (Add / Remove / Update)
+
+The application must make it easy for the operator to build and maintain the cue list.
+
+The operator must be able to:
+
+- **Add** a new cue anywhere in the cue list (at the end, or inserted between existing cues)
+- **Remove** a cue from the list, with a confirmation prompt to prevent accidental deletion
+- **Update** an existing cue's properties, including:
+  - cue number
+  - cue name / description
+  - audio file assigned to the cue
+  - any cue settings (volume, notes, etc.)
+
+Cue management must be possible **without stopping a performance in progress**. Editing a cue that is not currently playing must never interrupt audio that is already playing.
+
+## Cue Numbering by Script Page
+
+Cue numbers are based on the **page number of the script**.
+
+Example:
+
+- Cue 12.0 - first sound cue on script page 12
+- Cue 12.1 - second sound cue on script page 12
+- Cue 12.2 - third sound cue on script page 12
+- Cue 47.0 - first sound cue on script page 47
+
+This makes it easy for the operator and the stage manager to match the cue list to the printed script.
+
+The application must allow decimal cue numbers (such as 12.0, 12.1, 47.2, 47.21, 47.23) and keep the cue list sorted in performance order.
+
+## Saving Cue Sets (Plays)
+
+The complete cue list for a production is saved as a **cue set**, named after the theatrical play.
+
+Example:
+
+**"Clue"** saved **10/6/2026 23:48:35**
+
+Each save must record:
+
+- the play name
+- the date and time of the save
+- the complete cue list, including every cue's number, name, audio file reference, and settings
+
+## Never Overwrite - Always Maintain History
+
+Saving a cue set must **never overwrite** a previous save.
+
+Every save creates a **new version** in the play's history.
+
+The operator must be able to:
+
+- see the full save history of a play, with dates and times
+- open any previous version of the cue set
+- restore or continue working from an older version if a mistake was made
+
+Example history for the play **Clue**:
+
+- Clue - 10/4/2026 19:02:11
+- Clue - 10/5/2026 21:17:44
+- Clue - 10/6/2026 23:48:35  (current)
+
+This guarantees that no work is ever lost, even if cues are accidentally deleted or changed.
+
+## Play Folders
+
+Each play is stored in its own **folder**.
+
+The folder contains everything belonging to that production:
+
+- the saved cue set files (all versions / full history)
+- the audio files used by the cues
+- any related assets for the show
+
+Example:
+
+`Plays/Clue/`
+
+- `Clue - 10-4-2026 19-02-11.cueset`
+- `Clue - 10-5-2026 21-17-44.cueset`
+- `Clue - 10-6-2026 23-48-35.cueset`
+- `audio/doorbell.wav`
+- `audio/thunder.wav`
+- `audio/rain.wav`
+
+**Opening a play opens its folder**, giving the operator access to everything inside:
+
+- the current cue set (most recent version)
+- the version history
+- the audio files referenced by the cues
+
+Cue audio file references should be **relative to the play folder** so an entire play folder can be copied or moved to another computer and still work.
+
+## Main Performance Display
+
+The main performance screen should prominently display:
+
+**PLAYING**
+
+- Cue number
+- Cue name
+- Progress/waveform
+- Elapsed and remaining time
+- Audio level meter
+
+**ARMED**
+
+- Cue number
+- Cue name
+
+and a large:
+
+**GO**
+
+button.
+
+The ARMED cue should remain extremely prominent.
+
+Spacebar should perform exactly the same action as pressing GO.
+
+The design goal is that an operator should be able to glance at the screen for less than a second and understand the current state of the show.
+
+There is one especially useful detail here: **the waveform can show more than elapsed time**.
+
+Imagine a 20-second cue where nothing happens for six seconds, then there is a crash, followed by several smaller noises. The waveform lets the operator visually see that big spike approaching. That starts making the program feel like an actual theatrical playback console rather than Windows Media Player wearing a black shirt. 🎚️🎭
