@@ -46,3 +46,9 @@ output/gui-review/
 *.gform
 *.gmap
 *.gsite
+
+# Local troubleshooting logs
+logs/
+
+# Rebuildable decoded audio and validation cache
+output/audio-cache/

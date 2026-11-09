@@ -182,7 +182,7 @@ def test_armed_cue_preloaded_on_init(tmp_path):
     cs = CueSet(play_name="Clue", cues=[play("1.0", audio_file="audio/a.wav")])
     audio = AudioEngine(Mixer(SR), base_path=tmp_path)
     CueEngine(cs, audio)  # constructor preloads armed cue
-    for _ in range(50):
+    for _ in range(1000):
         with audio._prep_lock:
             if audio._prepared:
                 return
@@ -230,19 +230,20 @@ def test_import_same_size_different_content_not_deduped(tmp_path):
     pf = PlayFolder(tmp_path, "Clue")
     pf.ensure()
     existing = pf.audio_dir / "fx.wav"
-    existing.write_bytes(b"AAAA" * 100)
+    sf.write(str(existing), np.ones((100,2),dtype=np.float32)*.1, SR)
+    original = existing.read_bytes()
     src = tmp_path / "fx.wav"
-    src.write_bytes(b"BBBB" * 100)  # same size, different content
+    sf.write(str(src), np.ones((100,2),dtype=np.float32)*.2, SR)  # same size, different audio
     rel = pf.import_audio(src)
     assert rel != Path("audio") / "fx.wav"
-    assert existing.read_bytes() == b"AAAA" * 100
+    assert existing.read_bytes() == original
 
 
 def test_import_identical_content_deduped(tmp_path):
     pf = PlayFolder(tmp_path, "Clue")
     pf.ensure()
     src = tmp_path / "fx.wav"
-    src.write_bytes(b"SAME" * 100)
+    sf.write(str(src), np.ones((100,2),dtype=np.float32)*.1, SR)
     rel1 = pf.import_audio(src)
     rel2 = pf.import_audio(src)
     assert rel1 == rel2

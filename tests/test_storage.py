@@ -112,27 +112,32 @@ def test_import_audio_copies_and_returns_relative_path(tmp_path):
     pf = PlayFolder(tmp_path, "Clue")
     src = tmp_path / "downloads" / "thunder.wav"
     src.parent.mkdir(parents=True)
-    src.write_bytes(b"fake-audio-data")
+    import soundfile as sf
+    sf.write(str(src), [0.1]*100, 44100)
+    original = src.read_bytes()
     rel = pf.import_audio(src)
     assert rel == Path("audio") / "thunder.wav"
-    assert (pf.audio_dir / "thunder.wav").read_bytes() == b"fake-audio-data"
+    assert (pf.audio_dir / "thunder.wav").read_bytes() == original
 
 
 def test_import_audio_collision_never_overwrites(tmp_path):
     pf = PlayFolder(tmp_path, "Clue")
     src = tmp_path / "thunder.wav"
-    src.write_bytes(b"version-one")
+    import soundfile as sf
+    sf.write(str(src), [0.1]*100, 44100)
+    original = src.read_bytes()
     pf.import_audio(src)
-    src.write_bytes(b"version-two-different")
+    sf.write(str(src), [0.2]*200, 44100)
     rel2 = pf.import_audio(src)
     assert rel2 != Path("audio") / "thunder.wav"
-    assert (pf.audio_dir / "thunder.wav").read_bytes() == b"version-one"
+    assert (pf.audio_dir / "thunder.wav").read_bytes() == original
 
 
 def test_import_audio_dedupes_identical_source(tmp_path):
     pf = PlayFolder(tmp_path, "Clue")
     src = tmp_path / "rain.wav"
-    src.write_bytes(b"same-bytes")
+    import soundfile as sf
+    sf.write(str(src), [0.1]*100, 44100)
     rel1 = pf.import_audio(src)
     rel2 = pf.import_audio(src)
     assert rel1 == rel2  # no duplicate copy

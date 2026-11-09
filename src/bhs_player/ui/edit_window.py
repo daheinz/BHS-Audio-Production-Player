@@ -7,11 +7,14 @@ playback is isolated from show advancement and labeled TEST.
 
 from __future__ import annotations
 from .theme import ViewingModeControl
+from .audio_health import show_diagnostics
 
 from typing import Optional
+from PySide6.QtCore import Qt, QTimer, Slot, QThreadPool
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QSplitter,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -31,10 +34,7 @@ from .save_changes import SaveState
 
 # ---- cue row display + tooltips (Sections 5, 11) --------------------------
 
-_ADVANCE_LABEL = {
-    AdvanceMode.ON_COMPLETE: "On Complete",
-    AdvanceMode.ON_GO: "On GO",
-}
+_ADVANCE_LABEL = {mode: mode.label for mode in AdvanceMode}
 
 _BEHAVIOR_LABEL = {
     OnGoBehavior.ADD_TO_STACK: "Add",
@@ -90,9 +90,9 @@ def cue_row_tooltip(cue: Cue, cue_set: CueSet) -> str:
             "default duration used by FADE OUT controls (0 = instant stop)")
         add("Loop", "On" if cue.loop else "Off",
             "repeat the segment until stopped/faded")
-        add("Advance Mode", _ADVANCE_LABEL[cue.advance_mode],
-            "On Complete waits for the sound to finish before arming the next "
-            "cue; On GO arms the next cue immediately for overlap")
+        add("Next Cue Action", _ADVANCE_LABEL[cue.advance_mode],
+            "Arm Next at End arms the next cue at natural end; GO on End "
+            "arms it immediately and executes it at natural end; Arm Next Now arms it immediately for overlap")
         add("On GO Behavior", _BEHAVIOR_LABEL[cue.on_go_behavior],
             "what happens to already-playing sounds when this cue starts")
         start = cue.start_position if cue.start_position is not None else 0.0
@@ -129,8 +129,9 @@ class EditWindow(QMainWindow):
         self.play_folder = play_folder
         self.on_save = on_save
         self.setWindowTitle(f"Edit - {cue_set.play_name}")
-        self.resize(1500, 720)
+        self.resize(1500, 860)
         self._test_instance = None
+        self._test_request = 0
         self._test_cue_id: Optional[str] = None
 
         central = QWidget()
@@ -140,7 +141,13 @@ class EditWindow(QMainWindow):
         heading = QLabel(f"{cue_set.play_name}  /  EDIT")
         heading.setStyleSheet("font-size: 25px; font-weight: bold; padding: 8px 0")
         root.addWidget(heading)
-        root.addWidget(ViewingModeControl(self))
+        viewing_row = QHBoxLayout()
+        viewing_row.addWidget(ViewingModeControl(self))
+        logs_button = QPushButton("Diagnostics / Logs")
+        logs_button.clicked.connect(lambda: show_diagnostics(self, self.routing.backend if self.routing else None))
+        viewing_row.addWidget(logs_button)
+        viewing_row.addStretch(1)
+        root.addLayout(viewing_row)
         profile_row = QHBoxLayout()
         self.profile_label = QLabel("")
         self.profile_label.setWordWrap(True)
@@ -159,26 +166,40 @@ class EditWindow(QMainWindow):
         root.addWidget(self.routing_notice)
         self._refresh_profile()
 
-        self.list = CueTable(cue_set, editable=True, play_folder=play_folder)
+        self.list = CueTable(cue_set, editable=True, play_folder=play_folder, defer_audio=bool(getattr(audio, "nonblocking", False)))
         self.cue_table = self.list
         self.list.cueChanged.connect(self._mark_edited)
+        self.list.audioTestRequested.connect(self._audition)
         self.list.editRejected.connect(lambda message: self.status_lbl.setText(message))
+        self.list.audioImportStatus.connect(lambda message: self.status_lbl.setText(message))
         self.list.currentRowChanged.connect(lambda _r: self._update_buttons())
-        root.addWidget(self.list, 1)
+        self.editor_splitter = QSplitter(Qt.Vertical)
+        self.editor_splitter.addWidget(self.list)
+        root.addWidget(self.editor_splitter, 1)
+        from .clip_editor import ClipEditor
+        self.clip_editor = ClipEditor(self)
+        self.clip_editor.setMaximumHeight(260)
+        self.clip_editor.edited.connect(self._apply_clip)
+        self.list.currentRowChanged.connect(lambda _: self._sync_clip())
+        self.list.cueChanged.connect(self._sync_clip)
+        self.editor_splitter.addWidget(self.clip_editor)
+        self.editor_splitter.setStretchFactor(0, 1)
+        self.editor_splitter.setStretchFactor(1, 0)
+        self.editor_splitter.setSizes([360, 240])
+
+        root.addWidget(QLabel("Drag left-edge handles to reorder. Amber Cue IDs mark numeric reversals. Double-click cells to edit."))
 
         # cue actions
         row1 = QHBoxLayout()
         add_btn = QPushButton("Add Cue")
         add_btn.clicked.connect(self._add_cue)
-        edit_btn = QPushButton("Edit Selected Cell")
-        edit_btn.clicked.connect(self._edit_cue)
         del_btn = QPushButton("Remove Cue")
         del_btn.clicked.connect(self._remove_cue)
         up_btn = QPushButton("Move Up")
         up_btn.clicked.connect(lambda: self._move(-1))
         down_btn = QPushButton("Move Down")
         down_btn.clicked.connect(lambda: self._move(1))
-        for b in (add_btn, edit_btn, del_btn, up_btn, down_btn):
+        for b in (add_btn, del_btn, up_btn, down_btn):
             row1.addWidget(b)
         validate_btn = QPushButton("Validate Show")
         validate_btn.clicked.connect(self._validate_show)
@@ -190,7 +211,7 @@ class EditWindow(QMainWindow):
         advanced.clicked.connect(self._advanced)
         row1.addWidget(advanced)
         root.addLayout(row1)
-        self.edit_btn, self.del_btn, self.up_btn, self.down_btn = edit_btn, del_btn, up_btn, down_btn
+        self.del_btn, self.up_btn, self.down_btn = del_btn, up_btn, down_btn
 
         # audition / TEST (Section 13) with progress + meter
         row2 = QHBoxLayout()
@@ -301,6 +322,9 @@ class EditWindow(QMainWindow):
             return
         from ..audio.engine import _to_db
         self.test_progress.update()
+        if self.clip_editor.cue and self.clip_editor.cue.internal_id == self._test_cue_id:
+            self.clip_editor.plot.playhead = (voice.cue.start_position or 0)+voice.position_seconds
+            self.clip_editor.plot.update()
         self.test_meter.set_levels(_to_db(voice.last_peak_l),
                                    _to_db(voice.last_peak_r),
                                    voice.last_peak_l >= 1.0 or voice.last_peak_r >= 1.0)
@@ -308,6 +332,37 @@ class EditWindow(QMainWindow):
     # ---- list -------------------------------------------------------------
     def _rebuild(self):
         self.list.rebuild()
+        if hasattr(self, "clip_editor"):
+            self._sync_clip()
+
+    def _sync_clip(self):
+        if hasattr(self, 'clip_editor'):
+            self.clip_editor.set_cue(self._selected_cue(), self.cue_set, self.play_folder)
+
+    def _apply_clip(self, values):
+        cue = self._selected_cue()
+        if cue is None or self.clip_editor.cue is not cue:
+            return
+        from dataclasses import replace
+        import math
+        keys = ('start_position', 'end_position', 'fade_in', 'fade_out') if cue.is_play_sound() else ('fade_duration',) if cue.action is ActionType.FADE else ()
+        updates = {key: values[key] for key in keys}
+        try:
+            if any(value is not None and (not math.isfinite(value) or value < 0) for value in updates.values()):
+                raise ValueError('Clip times must be finite and nonnegative.')
+            candidate = replace(cue, **updates)
+            data = self.clip_editor.data
+            if cue.is_play_sound() and data and not candidate.segment_valid(data.duration):
+                raise ValueError('Keep Start before End and within the source recording.')
+            if not any(getattr(cue,key) != value for key,value in updates.items()):
+                return
+            for key, value in updates.items():
+                setattr(cue, key, value)
+            self._mark_edited()
+            self.list.rebuild()
+        except ValueError as exc:
+            self.status_lbl.setText(str(exc))
+        self._sync_clip()
 
     def _selected_index(self) -> int:
         return self.list.currentRow()
@@ -318,7 +373,7 @@ class EditWindow(QMainWindow):
 
     def _update_buttons(self):
         has = self._selected_cue() is not None
-        for b in (self.edit_btn, self.del_btn, self.up_btn, self.down_btn, self.test_btn):
+        for b in (self.del_btn, self.up_btn, self.down_btn, self.test_btn):
             b.setEnabled(has)
 
     # ---- cue operations ----------------------------------------------------
@@ -341,12 +396,6 @@ class EditWindow(QMainWindow):
         self.list.setCurrentCell(position, 1)
         self.list.editItem(self.list.item(position, 1))
         self._mark_edited()
-
-    def _edit_cue(self):
-        cue = self._selected_cue()
-        if cue is None:
-            return
-        self.list.editItem(self.list.currentItem())
 
     def _remove_cue(self):
         cue = self._selected_cue()
@@ -397,8 +446,8 @@ class EditWindow(QMainWindow):
             return f"{last}.0"
 
     # ---- audition / TEST (Section 13) --------------------------------------
-    def _audition(self):
-        cue = self._selected_cue()
+    def _audition(self, cue_internal_id=None):
+        cue = self.cue_set.by_internal_id(cue_internal_id) if isinstance(cue_internal_id, str) else self._selected_cue()
         if cue is None or not cue.is_play_sound():
             self.status_lbl.setText("Select a PLAY cue to test.")
             return
@@ -409,6 +458,14 @@ class EditWindow(QMainWindow):
             self.status_lbl.setText(self.routing.message if self.routing else "Configure an output in Profile & Routing first.")
             return
         self._stop_audition()
+        self._attempt_audition(cue.internal_id, self._test_request)
+
+    def _attempt_audition(self, cue_id, token):
+        if token != self._test_request:
+            return
+        cue = self.cue_set.by_internal_id(cue_id)
+        if cue is None or not cue.audio_file or not self.audio.ready:
+            return
         try:
             # isolated audition: does NOT touch show state or armed cue
             path = (self.play_folder.folder / cue.audio_file) if self.play_folder else cue.audio_file
@@ -422,12 +479,21 @@ class EditWindow(QMainWindow):
             self.test_meter.setVisible(True)
             self.test_lbl.setText(f"TEST playing: {cue.identifier}")
         except Exception as exc:
-            self.status_lbl.setText(f"TEST failed: {exc}")
+            if str(exc).startswith("Preparing audio"):
+                self.test_lbl.setText("Preparing TEST audio...")
+                QTimer.singleShot(50, self, lambda: self._attempt_audition(cue_id, token))
+            else:
+                self.test_lbl.setText("")
+                self.status_lbl.setText(f"TEST failed: {exc}")
 
     def _stop_audition(self):
+        self._test_request += 1
+        self.test_lbl.setText("")
         if self._test_instance is not None:
             self.audio.stop_instance(self._test_instance)
             self._test_instance = None
+            self.clip_editor.plot.playhead = None
+            self.clip_editor.plot.update()
             self.test_lbl.setText("")
             self.test_progress.clear()
             self.test_progress.setVisible(False)
@@ -436,6 +502,9 @@ class EditWindow(QMainWindow):
     # ---- save --------------------------------------------------------------
     def _save(self):
         # Finish any open inline editor before capturing the saved version.
+        if self.list.has_pending_imports:
+            self.status_lbl.setText("Wait for the audio import check to finish before saving.")
+            return False
         self.list.setFocus()
         if self.play_folder is None:
             self.status_lbl.setText("No play folder; cannot save.")
@@ -473,6 +542,7 @@ class EditWindow(QMainWindow):
             event.ignore()
             return
         self._timer.stop()
+        self.list.cancel_imports()
         self._stop_audition()
         if self.routing:
             self.routing.audio.stop_all()
@@ -490,11 +560,24 @@ class EditWindow(QMainWindow):
     def _validate_show(self):
         """Explicit Validate Show control (Section 19)."""
         from ..validate.check import validate_show
-        report = validate_show(
-            self.cue_set,
-            play_folder=self.play_folder.folder if self.play_folder else None,
-            output_device_available=self.audio.ready,
-        )
+        if getattr(self, '_readiness_job', None) is not None:
+            return
+        from copy import deepcopy
+        from .background import FileTask
+        cues = deepcopy(self.cue_set)
+        folder = self.play_folder.folder if self.play_folder else None
+        ready = self.audio.ready
+        self._readiness_job = FileTask(lambda: validate_show(cues, folder, output_device_available=ready))
+        self._readiness_job.signals.done.connect(self._readiness_checked)
+        self.status_lbl.setText("Checking audio files for Show Readiness...")
+        QThreadPool.globalInstance().start(self._readiness_job)
+
+    @Slot(object, str)
+    def _readiness_checked(self, report, error):
+        self._readiness_job = None
+        if error:
+            self.status_lbl.setText("Readiness check failed: " + error[:220])
+            return
         if self.routing:
             from ..validate.check import Severity
             reason = self.routing.unsupported()

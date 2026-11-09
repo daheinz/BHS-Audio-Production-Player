@@ -210,8 +210,9 @@ def test_mode_exit_stops_and_disarms_reentry(session):
     assert event.isAccepted()
     assert inst.stopped
     assert session.engine.armed_cue is None
-    assert session.backend.stream is None
-    assert not session.audio.ready
+    assert session.backend.stream.running
+    assert session.audio.ready  # prepared device pumps silence; no cue remains armed
+    assert not np.any(session.audio.mixer.render_block(128))
     assert not hasattr(win, "master_slider")
 
 
@@ -290,6 +291,8 @@ def test_preview_is_silent_and_normal_trigger_protection_remains(qapp):
 
 
 def test_held_space_triggers_once_and_modal_blocks_go(session, monkeypatch):
+    session.prepare()
+    session.engine.arm_cue(session.cue_set.cues[0].internal_id)
     win = MainWindow(session.cue_set, session.engine, session.audio, confirm_close=False)
     calls = []
     monkeypatch.setattr(win, "_go", lambda: calls.append(True))

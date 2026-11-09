@@ -40,7 +40,7 @@ def test_play_row_lists_fields_to_the_right():
     assert "In 0.5s" in row
     assert "Out 2s" in row
     assert "Loop" in row
-    assert "On GO" in row
+    assert "Arm Next Now" in row
     assert "Stop Prev" in row
     assert "[1 -> 9.5]" in row
     assert "audio/rain.wav" in row

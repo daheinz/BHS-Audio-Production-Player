@@ -55,20 +55,8 @@ class ValidationReport:
 
 
 def _probe_duration(path: Path) -> float:
-    """Duration in seconds, using libsndfile with a PyAV fallback for AAC/M4A."""
-    try:
-        info = sf.info(str(path))
-        if info.frames <= 0 or info.samplerate <= 0:
-            raise ValueError("no determinable duration")
-        return info.frames / info.samplerate
-    except Exception:
-        # AAC and other FFmpeg-only formats
-        from ..audio.engine import _load_segment_av
-        from ..cues.model import Cue
-        pcm, sr = _load_segment_av(str(path), Cue(identifier="0.0"))
-        if sr <= 0 or pcm.shape[0] == 0:
-            raise ValueError("no determinable duration")
-        return pcm.shape[0] / sr
+    from ..audio.safe_decode import inspect_audio
+    return inspect_audio(path)["duration"]
 
 
 def validate_show(
@@ -165,9 +153,9 @@ def validate_show(
             # loop + On Complete is invalid (Section 7)
             if not cue.loop_config_valid():
                 report.add(Severity.CRITICAL, cue.identifier,
-                           "Loop On combined with Advance Mode On Complete is "
+                           "Loop On combined with Arm Next at End or GO on End is "
                            "invalid: the sound never naturally completes.",
-                           "Use On GO / Trigger for looping ambience.")
+                           "Use Arm Next Now for looping ambience.")
 
         # STOP / FADE target references
         if cue.action in (ActionType.STOP, ActionType.FADE):

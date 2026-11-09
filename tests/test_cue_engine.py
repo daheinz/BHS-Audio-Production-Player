@@ -94,7 +94,7 @@ def test_failed_start_does_not_advance():
     assert eng.armed_cue is cs.cues[0]
 
 
-# ---- On GO / Trigger mode ----------------------------------------------
+# ---- Arm Next Now mode ----------------------------------------------
 
 def test_on_go_trigger_advances_immediately_and_sound_continues():
     eng, audio, cs = make_engine([

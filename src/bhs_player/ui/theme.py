@@ -38,6 +38,23 @@ def stylesheet(mode):
     QLabel[tone="error"] {{ color: {c['error']}; }}
     QLabel[tone="warning"] {{ color: {c['warning']}; }}
     QLabel[tone="success"] {{ color: {c['success']}; }}
+    QFrame#armedContainer, QFrame#playingContainer {{ border: 2px solid {c['muted']}; border-radius: 7px; }}
+    QLabel#performanceSectionTitle {{ font-size: 14px; font-weight: bold; padding: 2px 0; }}
+    QWidget#playingStackCard {{ background: #875024; color: #fff4e8; border: 1px solid #d78c43; border-radius: 5px; }}
+    QWidget#playingStackCard QLabel {{ color: #fff4e8; border: none; }}
+    QWidget#playingStackCard[selected="true"] {{ border: 2px solid #73aeff; }}
+    QWidget#playingStackCard QCheckBox, QWidget#playingStackCard QSlider {{ color: #fff4e8; background: transparent; }}
+    QWidget#playingStackCard QSlider::groove:horizontal {{ height: 4px; background: #3b291c; }}
+    QWidget#playingStackCard QSlider::sub-page:horizontal {{ background: #f1db8b; }}
+    QWidget#playingStackCard QSlider::handle:horizontal {{ width: 12px; margin: -5px 0; background: #fff4e8; border: 1px solid #3b291c; border-radius: 3px; }}
+    QWidget#playingStackCard QCheckBox::indicator {{ width: 13px; height: 13px; border: 1px solid #fff4e8; background: #3b291c; }}
+    QWidget#playingStackCard QCheckBox::indicator:checked {{ background: #f1db8b; border: 1px solid #292411; }}
+    QWidget#playingStackCard QProgressBar {{ background: #3b291c; border: none; }}
+    QWidget#playingStackCard QProgressBar::chunk {{ background: #ffd39a; }}
+    QFrame#armedStackCard {{ background: #f1db8b; border: 1px solid #dfc465; border-radius: 5px; }}
+    QFrame#armedStackCard QLabel {{ background: transparent; color: #292411; border: none; }}
+    QFrame#armedStackCard[cueState="idle"], QFrame#armedStackCard[cueState="waiting"], QFrame#armedStackCard[cueState="automatic"] {{ background: {c['button']}; border-color: {c['border']}; }}
+    QFrame#armedStackCard[cueState="idle"] QLabel, QFrame#armedStackCard[cueState="waiting"] QLabel, QFrame#armedStackCard[cueState="automatic"] QLabel {{ color: {c['text']}; }}
     QLabel#routeStatus {{ background: {c['route']}; color: {c['text']}; padding: 8px; font-weight: bold; }}
     """
 

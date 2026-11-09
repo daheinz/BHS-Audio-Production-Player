@@ -6,6 +6,9 @@ offers to restore a recovery copy if one is newer than the last save.
 
 from __future__ import annotations
 from .theme import ViewingModeControl
+from .settings import application_settings
+import hashlib
+import time
 
 from pathlib import Path
 from typing import Optional
@@ -33,6 +36,7 @@ class OpenPlayDialog(QDialog):
     def __init__(self, plays_root: Path, parent=None):
         super().__init__(parent)
         self.plays_root = Path(plays_root)
+        self.settings = application_settings()
         self.setWindowTitle("Open Play")
         self.setModal(True)
         self.resize(640, 380)
@@ -73,8 +77,19 @@ class OpenPlayDialog(QDialog):
         self._plays: list[PlayInfo] = []
         self._reload()
 
+    def open_named(self, name):
+        """Direct launcher path, reusing the normal version/recovery opening flow."""
+        for row, production in enumerate(self._plays):
+            if production.name == name:
+                self.plays_list.setCurrentRow(row)
+                self._open()
+                return self.result_cue_set is not None
+        QMessageBox.warning(self, "Production Not Found", f"No saved production named '{name}' was found. Open the normal player to choose or create a production.")
+        return False
+
     def _reload(self):
         self._plays = scan_plays(self.plays_root)
+        self._plays.sort(key=lambda p:(-self._last_opened(p.folder),p.name.casefold(),str(p.folder.folder)))
         self.plays_list.clear()
         for p in self._plays:
             item = QListWidgetItem(
@@ -82,6 +97,18 @@ class OpenPlayDialog(QDialog):
             self.plays_list.addItem(item)
         if self._plays:
             self.plays_list.setCurrentRow(0)
+
+    def _opened_key(self, folder):
+        identity=hashlib.sha256(str(folder.folder.resolve()).casefold().encode()).hexdigest()
+        return 'library/last_opened/'+identity
+
+    def _last_opened(self, folder):
+        try:return float(self.settings.value(self._opened_key(folder),0))
+        except (TypeError,ValueError):return 0
+
+    def _mark_opened(self, folder):
+        self.settings.setValue(self._opened_key(folder),time.time())
+        self.settings.sync()
 
     def _current_play(self) -> Optional[PlayInfo]:
         row = self.plays_list.currentRow()
@@ -127,6 +154,7 @@ class OpenPlayDialog(QDialog):
             self.result_play_folder = pf
             self.result_version_name = pf.latest_version().name
             self.created_new = True
+            self._mark_opened(pf)
             self.accept()
 
     def _open(self):
@@ -149,6 +177,7 @@ class OpenPlayDialog(QDialog):
                 self.result_cue_set = pf.load_recovery()
                 self.result_play_folder = pf
                 self.result_version_name = "(recovery)"
+                self._mark_opened(pf)
                 self.accept()
                 return
 
@@ -164,4 +193,5 @@ class OpenPlayDialog(QDialog):
             return
         self.result_play_folder = pf
         self.result_version_name = path.name
+        self._mark_opened(pf)
         self.accept()

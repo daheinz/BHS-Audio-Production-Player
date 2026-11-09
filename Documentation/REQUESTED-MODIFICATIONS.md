@@ -1,10 +1,10 @@
 # Requested GUI modifications
 
-Recorded November 8, 2026. These are requested changes for a later implementation pass; none is implemented by this list.
+Recorded November 8, 2026. Implementation is organized into three independently verified chunks. Status below is updated as each chunk is completed.
 
 ## 1. Drag handles for cue ordering
 
-Status: Requested.
+Status: Implemented and functionally tested (automated).
 
 - Add a narrow handle at the far left of each cue row.
 - Drag the handle to reposition the cue in performance order, with a visible insertion indicator.
@@ -14,7 +14,7 @@ Status: Requested.
 
 ## 2. Highlight cue IDs that are out of numeric order
 
-Status: Requested; adjacent-reversal rule clarified by the user.
+Status: Implemented and functionally tested (automated); adjacent-reversal rule follows the user example.
 
 - Compare adjacent cue IDs in performance order. Whenever an ID is numerically greater than the next ID, highlight both Cue ID cells, rather than the entire rows.
 - Example: `1.0, 1.2, 1.1, 1.3` highlights only `1.2` and `1.1`.
@@ -26,7 +26,7 @@ Status: Requested; adjacent-reversal rule clarified by the user.
 
 ## 3. Remove the redundant Edit Selected Cell button
 
-Status: Requested; redundancy confirmed in current source.
+Status: Implemented; redundant button removed.
 
 - The button's handler calls `editItem()` on the current table item. The table already supports double-click, the edit key (F2), and typing to begin editing; audio cells use the same file-picker delegate.
 - Remove the button while preserving these interactions, dropdown controls, and field help.
@@ -34,7 +34,7 @@ Status: Requested; redundancy confirmed in current source.
 
 ## 4. Right-click audition from an Audio File cell
 
-Status: Requested.
+Status: Implemented and functionally tested (automated).
 
 - In Edit Mode, right-click an Audio File cell containing a filename and offer a Play / TEST Audio action for that row.
 - Use the existing audition path so the preview uses the cue's trim, level, fades, loop, and bus assignment without destructive On GO behavior.
@@ -43,7 +43,7 @@ Status: Requested.
 
 ## 5. Graphical audio clip, trim, and fade editor
 
-Status: Requested design direction; needs a focused GUI design/implementation pass.
+Status: Implemented and functionally tested (automated); dark-mode screens visually reviewed.
 
 - Replace the spreadsheet's Start Position, End Position, Fade Duration, Fade-In, and Fade-Out controls with a graphical editing workflow where appropriate.
 - Use the waveform screenshot supplied with the November 8 request as the visual reference: separate stereo channel waveforms, a clearly bounded clip, and a gain/fade envelope with visible control points.
@@ -54,8 +54,79 @@ Status: Requested design direction; needs a focused GUI design/implementation pa
 - The screenshot does not by itself authorize arbitrary gain automation, multitrack editing, live panning, or a full audio workstation. Start with existing trim/fade settings.
 - Preserve the original audio asset; graphical edits should change cue playback settings.
 
-## Suggested implementation sequence
+## Implementation chunks
 
-1. Remove the redundant button and add right-click audition.
-2. Add drag-handle ordering and numeric-order warnings.
-3. Design and implement the graphical clip editor, including a clear treatment of FADE action duration.
+1. **Editing shortcuts — completed:** removed Edit Selected Cell; right-click an assigned Audio File cell for Play / TEST Audio.
+2. **Cue ordering — completed:** Edit-only left-edge drag handles, insertion line, stable-reference reordering, recovery saving, and ID-only adjacent-reversal warnings.
+3. **Graphical audio editing — completed:** background-loaded mono/stereo source waveform, trim/fade handles, precise Advanced numeric entry, and a separate FADE-action duration envelope.
+
+
+## Editing-chunk verification and usage (historical November 8 results)
+
+- Full suite: `python -m pytest -p no:cacheprovider` — 235 tests passed.
+- Focused tests cover context audition safety, actual Qt drop-event delivery, drag-grip initiation, linked references, recovery saving, numeric reversals, background waveform loading/stale results, mouse trim/fade changes, Cancel, exact timing preservation, and finite/loop fade playback.
+- `python tools/render_gui.py` generates the existing review screens plus a FADE-envelope screen; Edit, Advanced, and FADE-envelope images were visually inspected. Review is offscreen Qt rendering, not a native-desktop drag or theatre hardware verification.
+- Select a PLAY cue in Edit Mode to see its waveform. Drag Start / End bars and IN / OUT diamonds. The horizontal splitter adjusts space between the table and the clip panel. Exact timing remains available in Advanced Cue Editor.
+- Graph edits in the main panel apply on mouse release and update recovery. Advanced Editor changes apply only on OK; Cancel leaves the production unchanged. Escape cancels an in-progress graph drag.
+- Finite PLAY clips now apply their OUT fade at the playable end; manual FADE OUT retains that configured default. Loops do not apply end fades on each repetition. FADE action cues retain their separate target duration.
+- Waveform extraction reads bounded blocks on a background worker and caches a small peak representation. It currently uses soundfile-supported codecs; when extraction is unavailable, show the error and retain numeric editing. General playback streaming and multichannel routing remain outside these GUI chunks.
+- Preview waveforms are explicitly labeled sample data, produce no sound, and are not stored in production files. Real source audio files are never modified by the editor.
+
+
+## Approved November 9 Show/Rehearse redesign - completed
+
+The approved layout replaces the previous full-width stack and bottom cue table: full-height cue list left, fixed yellow Armed Cue and independently scrollable orange Playing Stack right, and compact status/GO/STOP ALL/master meters along the bottom. Cards grow upward, retain per-instance controls and per-cue bus identity, and no longer include audio meters. Row ARM remains; the redundant bottom ARM CUE button is removed. Selection outlines preserve state colors, and interrupted cues differ from completed.
+
+Keyboard additions: Enter arms the selected cue-table row; Ctrl+Shift+S invokes existing Stop All; Ctrl+F fades an explicitly selected/focused playback card. Space repeat/text/modal protections remain. Up/Down select without arming. Existing playback, intentional On GO interruption choices, completion, routing, saves, and Edit behavior remain intact. No engine or cue-file format change was required.
+
+Current verification: 284 tests pass, including focused interaction, per-instance isolation, state colors, bottom alignment/overflow, and 1500x920 / 1000x700 layout checks. Updated offline renders were inspected. See [Show/Rehearse guide](SHOW-MODE.md) and [Playing Stack guide](PLAYING-STACK.md). Physical theatre verification remains outstanding.
+
+
+Live playback follow-up completed: each card has a Level slider and Repeat checkbox initialized from cue settings. Adjustments affect only that instance and do not persist into cue files; repeat off finishes the current pass. Current suite: 289 tests pass. See [Show/Rehearse guide](SHOW-MODE.md).
+
+
+Completion follow-up: GO on End now genuinely arms the next cue during source playback, showing its yellow card and row flag. At natural end it executes that armed cue; manual early GO prevents a duplicate follow. Arm Next at End remains deferred arming. Current suite: 297 passing tests. See [operator guide](SHOW-MODE.md).
+
+
+Fresh-session state correction: Show/Rehearse entry now stops/disarms and resets all cue execution states to Idle, clearing stale rehearsal colors. Serialization writes Idle and ignores historical runtime states on load without changing the format or modifying original saved versions. Current suite: 300 passing tests, including mode transitions/re-entry and legacy/new-file state handling.
+
+
+Cue-follow update: Show/Rehearse now scroll on changes of the armed cue (or waiting source if nothing is armed). The table remains at the top through early cues, then centers the current row as advancement continues, clamping at the list bottom. Selection, arming, audio, and horizontal scroll remain unchanged; periodic refresh does not override manual browsing. Pixel scrolling provides smooth row positioning. Regression tests cover both modes, midpoint behavior, actual GO advancement, manual browsing, and end clamping. Current suite: 302 tests.
+
+
+## Audio Health and troubleshooting logging - implemented
+
+A compact bottom gauge now reports device-library processing load (callback timing fallback), persistent underflow/clipped-block counts, and five-second issue alerts. Over-budget callback measurements are kept distinct from driver-confirmed underflows. Output-loss and unavailable/preview states remain explicit. The panel does not claim buffer fullness or physical audibility.
+
+Diagnostics / Logs is available in Edit and Show/Rehearse. Its nonmodal viewer shows current device/health/playback context and a bounded log tail, with Refresh, Copy report, and Open Logs Folder. UTC logs are kept under project logs/, rotated at 2 MiB with four backups and ignored by Git. Startup/runtime, production/mode, device/route, cue GO/failure, live playback controls, preparation errors, output loss, and aggregated health issues are recorded. Audio callbacks update measurements only; control-thread polling queues events for listener-thread file writes. Existing buffering, latency, routing, and cue-file format remain unchanged.
+
+Current suite: 313 passing tests, including eleven diagnostics cases covering real offline PCM, callback/control-thread separation, counters/status, rotation/threaded writes, logging failure, local report/folder actions, and nonmodal playback preservation. Updated small/large layouts and explicitly simulated health examples were rendered and inspected. Physical hardware verification remains outstanding. See [Audio diagnostics guide](AUDIO-DIAGNOSTICS.md).
+
+
+Decoder/import safeguard follow-up: completed isolated and bounded decoder work, nonblocking GUI preparation/readiness/TEST, strict asynchronous import checks, transactional copy/reference behavior, cached suspect-file rejection, and logged failure details. Existing productions are preserved; failed cues remain visibly blocked. Current suite: 332 tests, including nineteen dedicated safety cases. See [Audio safety guide](AUDIO-SAFETY.md).
+
+
+Decoder allocation fix: numerical-library worker pools are restricted to one thread so their baseline committed memory does not consume the safety budget. Real cues 1, 7, and 34 pass offline decoding; the suspect cue remains blocked. Safety limits stay enabled. See [Audio safety guide](AUDIO-SAFETY.md).
+
+
+## Pending: Open Play list ordered by last opened
+
+Status: Requested; deferred. Do not implement until scheduled.
+
+- Sort productions in the Open Play list by when they were last successfully opened, most recently opened first.
+- Track last-opened time separately from save/version timestamps.
+- Use a stable fallback order for productions that have not been opened before.
+
+
+## Pending: Reuse audio validation across launches and mode entry
+
+Status: Requested; deferred. No application behavior changed.
+
+Current behavior: importing performs a full validation; Show/Rehearse entry runs readiness checks including audio metadata probes. Cached results avoid repeated probes during one application session, but the cache is memory-only and is lost on application exit, so subsequent launches probe files again.
+
+- Persist successful import validation and audio metadata so unchanged assets do not need decoder-based rechecking on every launch or Show/Rehearse entry.
+- Use quick file existence/change checks to identify missing, replaced, or modified assets; revalidate only new or changed files (and previously unvalidated legacy assets).
+- Keep non-file readiness checks for cue settings, trim bounds, routing/device availability, and required output configuration.
+- Keep playback preparation and decoder timeout/memory protections; preparing audio for playback is separate from validating an import.
+- Retain an explicit manual Recheck Audio action for troubleshooting.
+- Make progress/status text distinguish validation, readiness checks, and playback preparation.

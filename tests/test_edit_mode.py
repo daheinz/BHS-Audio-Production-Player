@@ -96,7 +96,7 @@ def test_editor_blocks_loop_with_on_complete(qapp, tmp_path):
     dlg.loop_check.setChecked(True)
     dlg.advance_combo.setCurrentIndex(0)  # On Complete
     dlg._on_accept()
-    assert "cannot use Advance Mode On Complete" in dlg.error_lbl.text()
+    assert "Loop requires Arm Next Now" in dlg.error_lbl.text()
 
 
 def test_editor_applies_play_fields(qapp, tmp_path):
@@ -108,7 +108,7 @@ def test_editor_applies_play_fields(qapp, tmp_path):
     dlg.file_row.setText("audio/thunder.wav")
     dlg.volume_spin.setValue(70.0)  # percent: 70% -> 0.7 relative
     dlg.loop_check.setChecked(True)
-    dlg.advance_combo.setCurrentIndex(1)  # On GO
+    dlg.advance_combo.setCurrentIndex(dlg.advance_combo.findData(AdvanceMode.ON_GO))  # On GO
     dlg._on_accept()
     assert dlg.result() == 1
     assert cue.identifier == "12.5"

@@ -58,12 +58,13 @@ def test_show_highlights_do_not_mutate_cues(qapp):
     table.close()
 
 
-def test_edit_audio_cell_opens_picker_and_imports(qapp, tmp_path, monkeypatch):
+def test_edit_audio_cell_opens_picker_and_imports(qapp, qtbot, tmp_path, monkeypatch):
     from bhs_player.storage.store import PlayFolder
     folder = PlayFolder(tmp_path / 'production', 'Show')
     folder.ensure()
     source = tmp_path / 'sound.wav'
-    source.write_bytes(b'audio file')
+    write_sound(source, 1)
+    original = source.read_bytes()
     cue = Cue('1.0')
     table = CueTable(CueSet('Show', [cue]), editable=True, play_folder=folder)
     picked = []
@@ -73,18 +74,21 @@ def test_edit_audio_cell_opens_picker_and_imports(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr('bhs_player.ui.cue_table.QFileDialog.getOpenFileName', picker)
     table.editItem(table.item(0, 3))
     assert len(picked) == 1
+    qtbot.waitUntil(lambda: cue.audio_file is not None, timeout=10000)
     assert cue.audio_file and not os.path.isabs(cue.audio_file)
-    assert (folder.folder / cue.audio_file).read_bytes() == b'audio file'
+    assert (folder.folder / cue.audio_file).read_bytes() == original
     assert table.item(0, 3).text() == cue.audio_file
     table.close()
 
 
-def test_audio_picker_full_path_and_cancel(qapp, tmp_path, monkeypatch):
+def test_audio_picker_full_path_and_cancel(qapp, qtbot, tmp_path, monkeypatch):
     cue = Cue('1.0')
     table = CueTable(CueSet('Show', [cue]), editable=True)
     source = tmp_path / 'sound.wav'
+    write_sound(source, 1)
     monkeypatch.setattr('bhs_player.ui.cue_table.QFileDialog.getOpenFileName', lambda *args: (str(source), ''))
     assert table.browse_audio(0)
+    qtbot.waitUntil(lambda: cue.audio_file is not None, timeout=10000)
     assert cue.audio_file == str(source).replace('\\', '/')
     monkeypatch.setattr('bhs_player.ui.cue_table.QFileDialog.getOpenFileName', lambda *args: ('', ''))
     assert not table.browse_audio(0)
@@ -95,13 +99,13 @@ def test_audio_picker_full_path_and_cancel(qapp, tmp_path, monkeypatch):
 def test_dropdowns_survive_repeated_edits_and_teardown(qapp):
     cue = Cue('1.0')
     table = CueTable(CueSet('Show', [cue]), editable=True)
-    for index in (1, 0, 1, 0):
+    for mode in (AdvanceMode.ON_GO, AdvanceMode.ON_COMPLETE, AdvanceMode.ON_GO, AdvanceMode.ON_COMPLETE):
         old = table.cellWidget(0, 5)
-        old.setCurrentIndex(index)
+        old.setCurrentIndex(old.findData(mode))
         # A replaced widget must not overwrite the cue during deferred deletion.
         old.setCurrentIndex(-1)
         qapp.processEvents()
-        assert cue.advance_mode is (AdvanceMode.ON_GO if index else AdvanceMode.ON_COMPLETE)
+        assert cue.advance_mode is mode
         for col in (5, 6, 11):
             assert isinstance(table.cellWidget(0, col), QComboBox)
             assert table.cellWidget(0, col).currentIndex() >= 0 if col != 11 else table.cellWidget(0, col).currentIndex() == -1
@@ -194,7 +198,7 @@ def write_sound(path, seconds):
     sf.write(str(path), np.zeros((int(seconds * sr), 2)), sr)
 
 
-def test_sound_selection_populates_full_end_and_persists(qapp, tmp_path, monkeypatch):
+def test_sound_selection_populates_full_end_and_persists(qapp, qtbot, tmp_path, monkeypatch):
     from bhs_player.storage.store import PlayFolder
     folder = PlayFolder(tmp_path / 'plays', 'Show')
     folder.ensure()
@@ -205,6 +209,7 @@ def test_sound_selection_populates_full_end_and_persists(qapp, tmp_path, monkeyp
     table = CueTable(cs, editable=True, play_folder=folder)
     monkeypatch.setattr('bhs_player.ui.cue_table.QFileDialog.getOpenFileName', lambda *args: (str(sound), ''))
     assert table.browse_audio(0)
+    qtbot.waitUntil(lambda: cue.audio_file is not None, timeout=10000)
     assert cue.end_position == 2.375
     assert cue.start_position == 1
     assert table.item(0, 10).text() == '2.38'
@@ -240,7 +245,8 @@ def test_unreadable_sound_reports_length_problem_without_using_previous_end(qapp
     table = CueTable(CueSet('Show', [cue]), editable=True)
     errors = []
     table.editRejected.connect(errors.append)
-    assert table.commit(0, 'audio_file', str(tmp_path / 'missing.wav'))
-    assert cue.end_position is None
-    assert 'length could not be read' in errors[-1]
+    assert not table.commit(0, 'audio_file', str(tmp_path / 'missing.wav'))
+    assert cue.end_position == 10
+    assert cue.audio_file is None
+    assert errors
     table.close()

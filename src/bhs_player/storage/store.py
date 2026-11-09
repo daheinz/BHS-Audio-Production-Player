@@ -54,7 +54,7 @@ def _cue_to_dict(cue: Cue) -> dict:
     d["action"] = cue.action.value
     d["advance_mode"] = cue.advance_mode.value
     d["on_go_behavior"] = cue.on_go_behavior.value
-    d["execution_state"] = cue.execution_state.value
+    d["execution_state"] = CueExecutionState.IDLE.value  # Playback history is session-only.
     return d
 
 
@@ -63,7 +63,7 @@ def _cue_from_dict(d: dict) -> Cue:
     d["action"] = ActionType(d["action"])
     d["advance_mode"] = AdvanceMode(d["advance_mode"])
     d["on_go_behavior"] = OnGoBehavior(d["on_go_behavior"])
-    d["execution_state"] = CueExecutionState(d.get("execution_state", "idle"))
+    d["execution_state"] = CueExecutionState.IDLE  # Ignore stale runtime states in older saves.
     return Cue(**d)
 
 
@@ -195,24 +195,40 @@ class PlayFolder:
             p.unlink()
 
     # -- audio import ------------------------------------------------------
-    def import_audio(self, source: Path) -> Path:
+    def import_audio(self, source: Path, prevalidated=False) -> Path:
         """Copy an external audio file into the play's audio folder and return
         the play-relative reference (Section 16). Collisions never overwrite.
         Identical content (not just same size) is deduplicated via hash."""
-        self.ensure()
         source = Path(source)
+        from ..audio.safe_decode import inspect_audio, fingerprint, validated_audio, remember_validated_copy
+        original_source = fingerprint(source)
+        metadata = validated_audio(source) if prevalidated else inspect_audio(source, full=True)  # Reject before copying or changing references.
+        self.ensure()
         dest = self.audio_dir / source.name
         if dest.exists():
             if _file_hash(dest) == _file_hash(source):
+                remember_validated_copy(dest, metadata)
                 return Path("audio") / dest.name  # truly identical, reuse
             n = 1
             while dest.exists():
                 dest = self.audio_dir / f"{source.stem} ({n}){source.suffix}"
                 if dest.exists() and _file_hash(dest) == _file_hash(source):
+                    remember_validated_copy(dest, metadata)
                     return Path("audio") / dest.name
                 n += 1
         import shutil
-        shutil.copy2(source, dest)
+        staged = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.audio_dir, suffix=".importing", delete=False) as temp:
+                staged = Path(temp.name)
+            shutil.copy2(source, staged)
+            if fingerprint(source) != original_source or _file_hash(staged) != _file_hash(source):
+                raise ValueError("Audio changed during import; wait for copying/downloading to finish and try again.")
+            staged.replace(dest)
+            remember_validated_copy(dest, metadata)
+        finally:
+            if staged is not None and staged.exists():
+                staged.unlink()
         return Path("audio") / dest.name
 
     # -- device preference (per play, Section 15) ---------------------------

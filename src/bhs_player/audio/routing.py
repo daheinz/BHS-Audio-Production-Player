@@ -2,6 +2,9 @@
 from dataclasses import asdict
 import json
 import time
+import logging
+
+log = logging.getLogger("bhs_player.routing")
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 from .stream import list_output_devices
@@ -81,14 +84,20 @@ class RoutingSession(QObject):
         reason = self.unsupported(route)
         if reason:
             self.message = reason
+            log.warning("ROUTE UNAVAILABLE route=%s device=%r reason=%s", route, getattr(self.cue_set.profile, route + '_device'), reason)
             return False
-        if self.engine:
-            self.engine.interrupt_output()
-        else:
-            self.audio.stop_all()
-        self.audio.set_ready(False)
-        self.backend.stop()
-        if not self.backend.select_device(self.device(route).index):
+        # Edit/Show/Rehearse share the exact same prepared endpoint. Keep its
+        # silent stream alive rather than reopening it for every mode or TEST.
+        reusable = (route == self.route and self.audio.ready and self.backend.stream is not None
+                    and self.backend.stream.running)
+        if not reusable:
+            if self.engine:
+                self.engine.interrupt_output()
+            else:
+                self.audio.stop_all()
+            self.audio.set_ready(False)
+            self.backend.stop()
+        if not reusable and not self.backend.select_device(self.device(route).index):
             self.message = self.backend.output_lost_reason or "Output preparation failed."
             return False
         self.route = route
@@ -98,6 +107,8 @@ class RoutingSession(QObject):
             level *= p.backup_levels.get(p.buses[0].id, 0)
         # Reuse the legacy scalar internally ONLY for this one-bus adapter.
         self.audio.mixer.set_master_level(level)
+        if not reusable:
+            log.info("ROUTE PREPARED route=%s device=%r bus_level=%s confirmed=%s", route, getattr(p, route + '_device'), level, sorted(self.confirmations))
         self.message = f"{route.upper()} prepared — {self.device(route).name}"
         return True
 

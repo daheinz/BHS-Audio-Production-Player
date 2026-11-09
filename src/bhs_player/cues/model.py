@@ -31,8 +31,14 @@ class ActionType(Enum):
 
 
 class AdvanceMode(Enum):
-    ON_COMPLETE = "on_complete"
+    ON_COMPLETE = "on_complete"  # Legacy serialized value retains arm-only semantics.
+    ON_COMPLETE_GO = "on_complete_go"
     ON_GO = "on_go"
+
+    @property
+    def label(self):
+        return {self.ON_COMPLETE: "Arm Next at End", self.ON_COMPLETE_GO: "GO on End",
+                self.ON_GO: "Arm Next Now"}[self]
 
 
 class OnGoBehavior(Enum):
@@ -117,7 +123,7 @@ class Cue:
 
     def loop_config_valid(self) -> bool:
         """Loop On + On Complete is invalid (Section 7)."""
-        return not (self.loop and self.advance_mode is AdvanceMode.ON_COMPLETE)
+        return not self.loop or self.advance_mode is AdvanceMode.ON_GO
 
 
 @dataclass

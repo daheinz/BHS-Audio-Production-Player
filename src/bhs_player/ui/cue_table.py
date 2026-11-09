@@ -2,29 +2,36 @@
 from dataclasses import replace
 from pathlib import Path
 import math
+import uuid
+from decimal import Decimal
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal, Slot, QThreadPool
+from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QHeaderView, QStyledItemDelegate,
-    QTableWidget, QTableWidgetItem,
+    QTableWidget, QTableWidgetItem, QMenu, QFrame, QStyle, QStyleOptionViewItem,
 )
 
 from ..cues.model import ActionType, AdvanceMode, OnGoBehavior, validate_identifier
 from ..audio.engine import audio_file_duration
 from .settings import application_settings
 from .theme import colors, viewing_mode
+from .cue_drag import CueDragHeader, MIME_TYPE
+from .cue_arm import CueArmHeader
+from .background import FileTask
 
 FIELDS = ('identifier', 'name', 'action', 'audio_file', 'notes', 'advance_mode',
           'on_go_behavior', 'volume', 'loop', 'start_position', 'end_position',
           'target_internal_id', 'fade_duration', 'fade_in', 'fade_out', 'bus_ids')
-HEADERS = ('Cue ID', 'Cue Name', 'Action', 'Audio File', 'Notes', 'Advance Mode',
+HEADERS = ('Cue ID', 'Cue Name', 'Action', 'Audio File', 'Notes', 'Next Cue Action',
            'On Go', 'Volume\nPercent', 'Loop', 'Start\nPosition', 'End\nPosition',
            'Target\nPlay Cue', 'Fade\nDuration', 'Fade-In', 'Fade-Out', 'Output Bus')
+ORDER_WARNING_ROLE = int(Qt.UserRole) + 8
+
 OPTIONS = {
     'action': [('Play', ActionType.PLAY), ('Stop', ActionType.STOP),
                ('Fade', ActionType.FADE), ('Stop All', ActionType.STOP_ALL)],
-    'advance_mode': [('On Complete', AdvanceMode.ON_COMPLETE), ('On Go / Trigger', AdvanceMode.ON_GO)],
+    'advance_mode': [(mode.label, mode) for mode in AdvanceMode],
     'on_go_behavior': [('Add to Play Stack', OnGoBehavior.ADD_TO_STACK),
                        ('Stop Prev. and Add', OnGoBehavior.STOP_PREVIOUS),
                        ('Stop All and Add', OnGoBehavior.STOP_ALL)],
@@ -36,10 +43,10 @@ FIELD_HELP = {
     'action': 'Play starts a sound; Stop stops the target; Fade fades the target to silence; Stop All stops every sound.',
     'audio_file': 'Sound file path. Edit this cell to choose a file. Files are imported into the play folder when available.',
     'notes': 'Operator notes, such as the line or stage movement that triggers this cue.',
-    'advance_mode': 'On Complete arms the next cue when this sound finishes. On Go / Trigger arms it immediately for overlap. Loops require On Go / Trigger.',
+    'advance_mode': 'Arm Next at End waits for natural completion and arms the next cue. GO on End arms the next cue immediately and executes that armed cue at natural completion. Arm Next Now arms it immediately for overlap. Stops and interruptions never cause automatic GO. Loops require Arm Next Now.',
     'on_go_behavior': 'Add to Play Stack keeps existing sounds playing. Stop Prev. and Add stops the most recent sound. Stop All and Add stops all existing sounds.',
     'volume': 'Playback volume as a percentage before the assigned bus output level. 100% is unity; 50% is half; 200% is double and may clip.',
-    'loop': 'Repeat the sound segment until stopped or faded. Loop requires Advance Mode On Go / Trigger.',
+    'loop': 'Repeat the sound segment until stopped or faded. Loop requires Next Cue Action Arm Next Now.',
     'start_position': 'Position in seconds at which playback begins. 0 means the start of the sound. Must be before End Position.',
     'end_position': 'Position in seconds at which playback ends. Choosing a sound fills in its full length; reduce this value to trim it. 0 means file end.',
     'target_internal_id': 'PLAY cue whose active sound this Stop or Fade affects. Defaults to the nearest preceding Play cue. The link survives renumbering and reordering.',
@@ -49,26 +56,58 @@ FIELD_HELP = {
 }
 
 
+class CueIdentifierDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        if index.data(ORDER_WARNING_ROLE):
+            # Keep the warning visible even when Qt paints row selection over its fill.
+            painter.save()
+            painter.setPen(QPen(QColor(colors()['warning']), 2))
+            painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
+            painter.restore()
+
+
 class AudioFileDelegate(QStyledItemDelegate):
-    """Use the same picker for double-click, F2, and Edit Selected Cell."""
+    """Use the same picker for double-click and F2."""
 
     def createEditor(self, parent, option, index):
         self.parent().browse_audio(index.row())
         return None
 
 
+class PerformanceCueDelegate(QStyledItemDelegate):
+    """Selection outlines preserve the independent cue-state fill and contrast."""
+    def paint(self, painter, option, index):
+        selected = bool(option.state & QStyle.State_Selected)
+        display = QStyleOptionViewItem(option)
+        display.state &= ~QStyle.State_Selected
+        super().paint(painter, display, index)
+        if selected:
+            painter.save()
+            painter.setPen(QPen(QColor('#73aeff'), 2))
+            painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
+            painter.restore()
+
+
 class CueTable(QTableWidget):
     currentRowChanged = Signal(int)
     cueChanged = Signal()
     editRejected = Signal(str)
+    audioTestRequested = Signal(str)
+    cueArmRequested = Signal(str)
+    audioImportStatus = Signal(str)
 
-    def __init__(self, cue_set, editable=False, play_folder=None, parent=None, settings=None):
+    def __init__(self, cue_set, editable=False, play_folder=None, parent=None, settings=None, armable=False, defer_audio=False):
         super().__init__(0, len(FIELDS), parent)
         self.cue_set, self.editable, self.play_folder = cue_set, editable, play_folder
+        self.armable = armable
         self._rebuilding = False
         self.settings = settings if settings is not None else application_settings()
+        self._audio_imports = {}
+        self.defer_audio = defer_audio
         if editable:
             self._initialize_defaults()
+        self.setItemDelegateForColumn(FIELDS.index('identifier'), CueIdentifierDelegate(self))
         self.setItemDelegateForColumn(FIELDS.index('audio_file'), AudioFileDelegate(self))
         self.setHorizontalHeaderLabels(HEADERS)
         for col, field in enumerate(FIELDS):
@@ -78,13 +117,44 @@ class CueTable(QTableWidget):
         self.setSortingEnabled(False)
         self.setEditTriggers((QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
                               QAbstractItemView.AnyKeyPressed) if editable else QAbstractItemView.NoEditTriggers)
-        self.verticalHeader().hide()
+        self._drag_token = uuid.uuid4().hex
+        self._drop_line = QFrame(self.viewport())
+        self._drop_line.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._drop_line.hide()
+        if editable:
+            self.setVerticalHeader(CueDragHeader(self))
+            self.setDragDropMode(QAbstractItemView.DropOnly)
+            self.setDefaultDropAction(Qt.MoveAction)
+            self.setAcceptDrops(True)
+            self.viewport().setAcceptDrops(True)
+            self.setAutoScroll(True)
+        elif armable:
+            delegate = PerformanceCueDelegate(self)
+            self.setItemDelegate(delegate)
+            self.setItemDelegateForColumn(FIELDS.index('identifier'), delegate)
+            self.setItemDelegateForColumn(FIELDS.index('audio_file'), delegate)
+            self.setVerticalHeader(CueArmHeader(self))
+            self.verticalHeader().show()
+        else:
+            self.verticalHeader().hide()
         self.verticalHeader().setDefaultSectionSize(42)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         for col, width in enumerate((70, 170, 95, 230, 300, 150, 170, 85, 55, 95, 95, 150, 95, 85, 85)):
             self.setColumnWidth(col, width)
         self.setColumnWidth(FIELDS.index("bus_ids"), 160)
         self.horizontalHeader().moveSection(FIELDS.index("bus_ids"), 3)
+        for field in ('start_position', 'end_position', 'fade_duration', 'fade_in', 'fade_out'):
+            self.setColumnHidden(FIELDS.index(field), True)
+        if armable:
+            self.horizontalHeaderItem(FIELDS.index('identifier')).setText('Cue')
+            self.horizontalHeaderItem(FIELDS.index('bus_ids')).setText('Bus')
+            self.horizontalHeaderItem(FIELDS.index('advance_mode')).setText('Next Cue\nAction')
+            self.setColumnHidden(FIELDS.index('audio_file'), True)
+            compact = {'identifier':54, 'name':170, 'action':65, 'bus_ids':60,
+                       'notes':120, 'advance_mode':110, 'on_go_behavior':125,
+                       'volume':62, 'loop':42, 'target_internal_id':72}
+            for field, width in compact.items():
+                self.setColumnWidth(FIELDS.index(field), width)
         self._restore_widths()
         self.horizontalHeader().sectionResized.connect(self._save_width)
         self._active_ids, self._next_id = set(), None
@@ -92,7 +162,104 @@ class CueTable(QTableWidget):
         self._apply_theme()
         self.currentCellChanged.connect(lambda row, col, oldrow, oldcol: self.currentRowChanged.emit(row))
         self.itemChanged.connect(self._item_changed)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._audio_context_menu)
         self.rebuild()
+
+    def out_of_order_ids(self):
+        flagged = set()
+        for left, right in zip(self.cue_set.cues, self.cue_set.cues[1:]):
+            if validate_identifier(left.identifier) and validate_identifier(right.identifier) and Decimal(left.identifier) > Decimal(right.identifier):
+                flagged.update((left.internal_id, right.internal_id))
+        return flagged
+
+    def move_cue_to_boundary(self, cue_id, boundary):
+        if not self.editable or not 0 <= boundary <= len(self.cue_set.cues):
+            return False
+        old = self.cue_set.index_of(cue_id)
+        if old is None:
+            return False
+        destination = boundary - (1 if boundary > old else 0)
+        if destination == old:
+            return False
+        self.cue_set.move(cue_id, destination)
+        self.rebuild()
+        self.setCurrentCell(destination, 0)
+        self.scrollToItem(self.item(destination, 0))
+        self.cueChanged.emit()
+        return True
+
+    def _dragged_cue(self, event):
+        if not self.editable or not event.mimeData().hasFormat(MIME_TYPE):
+            return None
+        raw = bytes(event.mimeData().data(MIME_TYPE)).decode('utf-8', errors='replace')
+        token, _, cue_id = raw.partition(':')
+        return cue_id if token == self._drag_token and self.cue_set.by_internal_id(cue_id) else None
+
+    def _drop_boundary(self, position):
+        row = self.rowAt(position.y())
+        if row < 0:
+            return len(self.cue_set.cues) if position.y() >= 0 else 0
+        rect = self.visualRect(self.model().index(row, 0))
+        return row + (1 if position.y() > rect.center().y() else 0)
+
+    def dragEnterEvent(self, event):
+        if self._dragged_cue(event):
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if not self._dragged_cue(event):
+            event.ignore()
+            return
+        position = event.position().toPoint()
+        bar = self.verticalScrollBar()
+        if position.y() < 24:
+            bar.setValue(bar.value()-bar.singleStep())
+        elif position.y() > self.viewport().height()-24:
+            bar.setValue(bar.value()+bar.singleStep())
+        boundary = self._drop_boundary(position)
+        y = self.rowViewportPosition(boundary) if boundary < self.rowCount() else (self.rowViewportPosition(self.rowCount()-1)+self.rowHeight(self.rowCount()-1) if self.rowCount() else 0)
+        self._drop_line.setStyleSheet(f"background: {colors()['warning']};")
+        self._drop_line.setGeometry(0, max(0, y-1), self.viewport().width(), 3)
+        self._drop_line.show()
+        self._drop_line.raise_()
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+
+    def dragLeaveEvent(self, event):
+        self._drop_line.hide()
+        event.accept()
+
+    def dropEvent(self, event):
+        self._drop_line.hide()
+        cue_id = self._dragged_cue(event)
+        if cue_id:
+            self.move_cue_to_boundary(cue_id, self._drop_boundary(event.position().toPoint()))
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def audio_menu_for(self, row, column):
+        if not self.editable or column != FIELDS.index('audio_file') or not 0 <= row < len(self.cue_set.cues):
+            return None
+        cue = self.cue_set.cues[row]
+        if not cue.is_play_sound() or not cue.audio_file:
+            return None
+        menu = QMenu(self)
+        play = menu.addAction("Play / TEST Audio")
+        play.triggered.connect(lambda: self.audioTestRequested.emit(cue.internal_id))
+        return menu
+
+    def _audio_context_menu(self, position):
+        index = self.indexAt(position)
+        menu = self.audio_menu_for(index.row(), index.column())
+        if menu is not None:
+            menu.exec(self.viewport().mapToGlobal(position))
+            menu.deleteLater()
 
     def count(self):
         return self.rowCount()
@@ -103,12 +270,16 @@ class CueTable(QTableWidget):
     def setCurrentRow(self, row):
         self.setCurrentCell(row, 0)
 
+    def _width_key(self, field):
+        namespace = 'performance_widths_v1' if self.armable else 'widths'
+        return f'cue_table/{namespace}/{field}'
+
     def _restore_widths(self):
         header = self.horizontalHeader()
         blocked = header.blockSignals(True)
         for col, field in enumerate(FIELDS):
             try:
-                width = int(self.settings.value(f'cue_table/widths/{field}', self.columnWidth(col)))
+                width = int(self.settings.value(self._width_key(field), self.columnWidth(col)))
             except (TypeError, ValueError):
                 continue
             if 32 <= width <= 4000:
@@ -116,7 +287,7 @@ class CueTable(QTableWidget):
         header.blockSignals(blocked)
 
     def _save_width(self, col, old_width, width):
-        self.settings.setValue(f'cue_table/widths/{FIELDS[col]}', width)
+        self.settings.setValue(self._width_key(FIELDS[col]), width)
         self.settings.sync()
 
     def _sound_duration(self, audio_file):
@@ -164,7 +335,7 @@ class CueTable(QTableWidget):
         for cue in self.cue_set.cues:
             if cue.action in (ActionType.STOP, ActionType.FADE) and cue.target_internal_id is None:
                 cue.target_internal_id = self._default_target(cue)
-            if cue.is_play_sound() and cue.audio_file and cue.end_position is None:
+            if not self.defer_audio and cue.is_play_sound() and cue.audio_file and cue.end_position is None:
                 try:
                     duration = self._sound_duration(cue.audio_file)
                     if (cue.start_position or 0) < duration:
@@ -173,6 +344,13 @@ class CueTable(QTableWidget):
                     # Missing or unreadable saved references remain visible;
                     # Validate Show reports them without blocking the editor.
                     pass
+
+    @property
+    def has_pending_imports(self):
+        return bool(self._audio_imports)
+
+    def cancel_imports(self):
+        self._audio_imports.clear()  # Late worker results cannot change closed productions.
 
     def browse_audio(self, row):
         if not self.editable or not 0 <= row < len(self.cue_set.cues):
@@ -186,7 +364,39 @@ class CueTable(QTableWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, 'Choose Audio File', initial,
             'Audio Files (*.wav *.mp3 *.flac *.aac *.m4a *.ogg);;All Files (*)')
-        return self.commit(row, 'audio_file', path) if path else False
+        if not path:
+            return False
+        cue_id = cue.internal_id
+        token = uuid.uuid4().hex
+        old_file = cue.audio_file
+        from ..audio.safe_decode import inspect_audio
+        task = FileTask(lambda: (inspect_audio(path, full=True), cue_id, token, path, old_file))
+        self._audio_imports[cue_id] = (token, task)
+        task.signals.done.connect(self._audio_checked)
+        self.audioImportStatus.emit("Checking audio before import: " + Path(path).name)
+        QThreadPool.globalInstance().start(task)
+        return True
+
+    @Slot(object, str)
+    def _audio_checked(self, result, error):
+        if error:
+            for cue_id, (_, task) in list(self._audio_imports.items()):
+                if task.signals is self.sender():
+                    self._audio_imports.pop(cue_id, None)
+                    self.editRejected.emit("Audio import rejected: " + error[:220] + " See Diagnostics / Logs.")
+                    break
+            return
+        _, cue_id, token, path, old_file = result
+        current = self._audio_imports.get(cue_id)
+        if not current or current[0] != token:
+            return
+        self._audio_imports.pop(cue_id, None)
+        cue = self.cue_set.by_internal_id(cue_id)
+        row = self.cue_set.index_of(cue_id)
+        if cue is None or row is None or cue.audio_file != old_file:
+            return
+        if self.commit(row, 'audio_file', path, prevalidated=True):
+            self.audioImportStatus.emit("Audio checked and imported: " + Path(path).name)
 
     def rebuild(self):
         self._restore_widths()
@@ -260,7 +470,7 @@ class CueTable(QTableWidget):
         value = item.checkState() == Qt.Checked if field == 'loop' else item.text()
         self.commit(item.row(), field, value)
 
-    def commit(self, row, field, value):
+    def commit(self, row, field, value, prevalidated=False):
         if self._rebuilding or not self.editable:
             return False
         cue = self.cue_set.cues[row]
@@ -287,8 +497,13 @@ class CueTable(QTableWidget):
             elif field == 'audio_file':
                 value = value.strip() or None
                 if value and Path(value).is_absolute():
+                    from ..audio.safe_decode import inspect_audio, validated_audio
+                    if prevalidated:
+                        validated_audio(value)
+                    else:
+                        inspect_audio(value, full=True)
                     if self.play_folder is not None:
-                        value = str(self.play_folder.import_audio(Path(value))).replace('\\', '/')
+                        value = str(self.play_folder.import_audio(Path(value), prevalidated=prevalidated)).replace('\\', '/')
                     else:
                         value = str(Path(value)).replace('\\', '/')
             candidate = replace(cue, **{field: value})
@@ -305,7 +520,7 @@ class CueTable(QTableWidget):
                 candidate.target_internal_id = self._default_target(cue)
             if candidate.is_play_sound():
                 if not candidate.loop_config_valid():
-                    raise ValueError('Loop requires On Go / Trigger. Change Advance Mode first.')
+                    raise ValueError('Loop requires Arm Next Now. Change Next Cue Action first.')
                 if candidate.end_position is not None and (candidate.start_position or 0) >= candidate.end_position:
                     raise ValueError('Start Position must be before End Position (0 end = file end).')
             setattr(cue, field, value)
@@ -314,7 +529,7 @@ class CueTable(QTableWidget):
             if field == 'audio_file':
                 cue.start_position = candidate.start_position
                 cue.end_position = candidate.end_position
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
             self.editRejected.emit(str(exc))
             self.rebuild()
             return False
@@ -328,7 +543,7 @@ class CueTable(QTableWidget):
         c = colors()
         color = c['button']
         if field == 'advance_mode':
-            color = c['on_complete'] if cue.advance_mode is AdvanceMode.ON_COMPLETE else c['on_go']
+            color = c['stop_previous'] if cue.advance_mode is AdvanceMode.ON_COMPLETE_GO else c['on_complete'] if cue.advance_mode is AdvanceMode.ON_COMPLETE else c['on_go']
         elif field == 'on_go_behavior':
             color = c[{OnGoBehavior.ADD_TO_STACK: 'add', OnGoBehavior.STOP_PREVIOUS: 'stop_previous', OnGoBehavior.STOP_ALL: 'stop_all'}[cue.on_go_behavior]]
         if not self.applicable(cue, field):
@@ -350,12 +565,36 @@ class CueTable(QTableWidget):
         self._active_ids, self._next_id = set(active_ids), next_id
         c = colors()
         blocked = self.blockSignals(True)
+        flagged = self.out_of_order_ids() if self.editable else set()
         for row, cue in enumerate(self.cue_set.cues):
             active, armed = cue.internal_id in active_ids, cue.internal_id == next_id
             key = 'playing' if active else 'armed' if armed else 'completed' if cue.execution_state.value in ('complete', 'interrupted') else 'idle'
+            state_background, state_text = c[key], c['text']
+            if self.armable:
+                if active:
+                    state_background, state_text = '#875024', '#fff4e8'
+                elif armed:
+                    state_background, state_text = '#f1db8b', '#292411'
+                elif cue.execution_state.value == 'interrupted':
+                    state_background = '#503641'
             for col, field in enumerate(FIELDS):
                 item = self.item(row, col)
                 if item is not None:
-                    item.setBackground(QColor(c[key] if self.applicable(cue, field) else c['inactive']))
-                    item.setForeground(QColor(c['text'] if self.applicable(cue, field) else c['muted']))
+                    item.setBackground(QColor(state_background if self.applicable(cue, field) else c['inactive']))
+                    item.setForeground(QColor(state_text if self.applicable(cue, field) else c['muted']))
+                    if field == 'identifier':
+                        warning = cue.internal_id in flagged
+                        item.setData(ORDER_WARNING_ROLE, warning)
+                        if warning:
+                            item.setBackground(QColor(c['stop_previous']))
+                            item.setForeground(QColor(c['warning']))
+                        font = item.font()
+                        font.setBold(warning)
+                        item.setFont(font)
+                        item.setToolTip(f"Cue ID: {cue.identifier}\n{FIELD_HELP[field]}" + ("\nOut of numeric order with an adjacent cue. Order is advisory; drag a handle to rearrange." if warning else ""))
         self.blockSignals(blocked)
+        header = self.verticalHeader()
+        if isinstance(header, CueArmHeader):
+            header.sync_states()
+        else:
+            header.viewport().update()

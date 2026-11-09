@@ -22,6 +22,10 @@ Design:
 from __future__ import annotations
 
 import threading
+import time
+import logging
+from collections import OrderedDict
+from dataclasses import replace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -54,6 +58,8 @@ class Voice:
                  target_rate: Optional[int] = None):
         """pcm: float32 (frames, channels). Resampled to target_rate so every
         voice mixes at one output rate (Section 6)."""
+        if pcm.ndim != 2 or pcm.shape[0] == 0 or pcm.shape[1] not in (1, 2):
+            raise ValueError("Playback requires nonempty mono or stereo audio.")
         if target_rate and target_rate != sample_rate and pcm.shape[0] > 1:
             pcm = resample_linear(pcm, sample_rate, target_rate)
             sample_rate = target_rate
@@ -92,6 +98,8 @@ class Voice:
         self._fade_total = frames
         self._fade_remaining = frames
         self._fade_from_env = self._fade_in_factor()
+        if not self.looping and self.fade_out_duration > 0:
+            self._fade_from_env *= min(1.0, max(0.0, (self.frames-self.pos)/(self.fade_out_duration*self.sample_rate)))
 
     def stop(self) -> None:
         self.stopped = True
@@ -126,8 +134,15 @@ class Voice:
                 idx = np.arange(chunk, dtype=np.float32)
                 start_done = self._fade_in_total - self._fade_in_remaining
                 fi = np.clip((start_done + idx) / self._fade_in_total, 0.0, 1.0)
-                seg = seg * fi[:, None]
+                if not self.fading:
+                    seg = seg * fi[:, None]
                 self._fade_in_remaining = max(0, self._fade_in_remaining - chunk)
+            # Finite clips honor the graphical OUT envelope at the playable end.
+            # Loops keep this setting for the manual FADE OUT control only.
+            if not self.looping and not self.fading and self.fade_out_duration > 0:
+                remaining = self.frames - (self.pos + np.arange(chunk, dtype=np.float32))
+                end_fade = np.clip(remaining / (self.fade_out_duration*self.sample_rate), 0.0, 1.0)
+                seg = seg * end_fade[:, None]
             # fade-out ramp (from the envelope level when the fade began)
             if self.fading and self._fade_total:
                 idx = np.arange(chunk, dtype=np.float32)
@@ -279,86 +294,13 @@ def resample_linear(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray
 
 
 def audio_file_duration(path: str) -> float:
-    """Read the full sound length without applying a cue's segment settings."""
-    try:
-        info = sf.info(path)
-        return info.frames / info.samplerate
-    except Exception:
-        import av
-        with av.open(path) as container:
-            stream = next(s for s in container.streams if s.type == 'audio')
-            if stream.duration is not None and stream.time_base is not None:
-                return float(stream.duration * stream.time_base)
-            # Files without stream duration require counting decoded samples.
-            return sum(frame.samples / frame.sample_rate
-                       for frame in container.decode(stream))
+    from .safe_decode import inspect_audio
+    return inspect_audio(path)["duration"]
 
 
-def load_segment_mono_or_stereo(path: str, cue: Cue) -> tuple[np.ndarray, int]:
-    """Decode the cue's configured segment to float32 PCM. Returns
-    (pcm, sample_rate). Raises on missing/unreadable files or bad segments.
-
-    WAV/FLAC/MP3/OGG decode via libsndfile; AAC/M4A (unsupported by
-    libsndfile) fall back to PyAV/FFmpeg (Section 6).
-    """
-    if sf is None:  # pragma: no cover
-        raise RuntimeError("soundfile not available")
-    try:
-        info = sf.info(path)
-        sr = info.samplerate
-        total_frames = info.frames
-        reader = lambda s, n: sf.read(path, start=s, frames=n, dtype="float32",
-                                      always_2d=True)  # noqa: E731
-    except Exception:
-        return _load_segment_av(path, cue)
-    start = int((cue.start_position or 0.0) * sr)
-    end = int(cue.end_position * sr) if cue.end_position is not None else total_frames
-    if start >= total_frames:
-        raise ValueError(
-            f"Start position {start / sr:.2f}s is beyond the file duration "
-            f"{total_frames / sr:.2f}s")
-    end = min(end, total_frames)
-    if end <= start:
-        raise ValueError("Empty segment: Start must be before End")
-    data, sr = reader(start, end - start)
-    return data, sr
-
-
-def _load_segment_av(path: str, cue: Cue) -> tuple[np.ndarray, int]:
-    """AAC/M4A decode via PyAV. Decodes the file, then slices the segment."""
-    try:
-        import av
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(f"Cannot decode '{path}': libsndfile rejected it and "
-                           "PyAV is not installed") from exc
-    container = av.open(path)
-    try:
-        stream = next(s for s in container.streams if s.type == "audio")
-        sr = stream.codec_context.sample_rate or SAMPLE_RATE
-        chunks = []
-        for frame in container.decode(stream):
-            arr = frame.to_ndarray()  # (channels, samples) or (samples,)
-            if arr.ndim == 1:
-                arr = arr[None, :]
-            chunks.append(arr.T.astype(np.float32))
-        if not chunks:
-            raise RuntimeError(f"no audio frames decoded from '{path}'")
-        pcm = np.vstack(chunks)
-        # normalize integer formats to float range if needed
-        if np.abs(pcm).max() > 2.0:
-            pcm = pcm / 32768.0
-    finally:
-        container.close()
-    start = int((cue.start_position or 0.0) * sr)
-    end = int(cue.end_position * sr) if cue.end_position is not None else pcm.shape[0]
-    if start >= pcm.shape[0]:
-        raise ValueError(
-            f"Start position {start / sr:.2f}s is beyond the file duration "
-            f"{pcm.shape[0] / sr:.2f}s")
-    end = min(end, pcm.shape[0])
-    if end <= start:
-        raise ValueError("Empty segment: Start must be before End")
-    return pcm[start:end].copy(), sr
+def load_segment_mono_or_stereo(path: str, cue: Cue, target_rate=None) -> tuple[np.ndarray, int]:
+    from .safe_decode import decode_audio
+    return decode_audio(path, cue, target_rate)
 
 
 @dataclass
@@ -381,13 +323,17 @@ class AudioEngine:
     """
 
     def __init__(self, mixer: Optional[Mixer] = None, ready: bool = True,
-                 base_path: Optional[Path] = None):
+                 base_path: Optional[Path] = None, nonblocking=False):
         self.mixer = mixer or Mixer()
         self._ready = ready
         self.base_path = Path(base_path) if base_path else None
         self._instances: dict[int, tuple[Voice, object]] = {}
         self._counter = 0
-        self._prepared: dict[tuple, _Prepared] = {}
+        self._prepared = OrderedDict()
+        self.nonblocking = nonblocking
+        self._preparing = set()
+        self._source_snapshots = {}
+        self._prepare_jobs = {}
         self._prepare_errors: dict[tuple, str] = {}
         self._prep_lock = threading.Lock()
         self.on_instance_ended: Optional[Callable[[object, bool], None]] = None
@@ -408,47 +354,76 @@ class AudioEngine:
         return p
 
     # -- preparation / preload ---------------------------------------------
-    def _prep_key(self, cue: Cue) -> tuple:
-        return (cue.internal_id, cue.audio_file, cue.start_position,
-                cue.end_position, cue.volume, cue.fade_in, cue.loop)
+    def _prep_key(self, cue: Cue, refresh=False) -> tuple:
+        from .safe_decode import fingerprint
+        path=str(self.resolve_audio_path(cue.audio_file))
+        now=time.monotonic()
+        snapshot=self._source_snapshots.get(path)
+        if snapshot is not None and not refresh and now-snapshot[0]<1:
+            source=snapshot[1]
+        else:
+            try:source=fingerprint(path)
+            except (OSError,TypeError):source=(path,None,None)
+            self._source_snapshots[path]=(now,source)
+        return (source, cue.start_position, cue.end_position, self.mixer.sample_rate)
 
-    def prepare_async(self, cue: Cue) -> None:
-        """Decode+resample the cue off the calling thread (Section 15)."""
-        if cue.audio_file is None:
+    def prepare_async(self, cue: Cue, refresh=True) -> None:
+        if not cue.audio_file:
             return
+        key = self._prep_key(cue,refresh=refresh)
+        with self._prep_lock:
+            if key in self._prepared or key in self._preparing or key in self._prepare_errors:
+                return
+            self._preparing.add(key)
+        job = threading.Thread(target=self._prepare_sync, args=(replace(cue), key), daemon=True)
+        with self._prep_lock:
+            self._prepare_jobs[key] = job
+        job.start()
+
+    def preparation_status(self, cue):
         key = self._prep_key(cue)
         with self._prep_lock:
             if key in self._prepared:
-                return
-        t = threading.Thread(target=self._prepare_sync, args=(cue, key),
-                             daemon=True)
-        t.start()
+                self._prepared.move_to_end(key)
+                return "ready", ""
+            if key in self._prepare_errors:
+                return "failed", "Audio blocked: " + self._prepare_errors[key][:220] + " See Diagnostics / Logs."
+            return "preparing", "Preparing audio - GO will be available when ready."
 
     def _prepare_sync(self, cue: Cue, key: tuple) -> None:
+        started=time.monotonic()
         try:
             pcm, sr = load_segment_mono_or_stereo(
-                str(self.resolve_audio_path(cue.audio_file)), cue)
-            if sr != self.mixer.sample_rate and pcm.shape[0] > 1:
-                pcm = resample_linear(pcm, sr, self.mixer.sample_rate)
-                sr = self.mixer.sample_rate
+                str(self.resolve_audio_path(cue.audio_file)), cue, self.mixer.sample_rate)
+            if key != self._prep_key(cue,refresh=True):
+                raise RuntimeError("Audio changed during preparation; retry with the updated file.")
+            from .safe_decode import DECODE_LIMIT
             with self._prep_lock:
+                while self._prepared and sum(p.pcm.nbytes for p in self._prepared.values()) + pcm.nbytes > 2*DECODE_LIMIT:
+                    self._prepared.popitem(last=False)
                 self._prepared[key] = _Prepared(pcm, sr, key)
                 self._prepare_errors.pop(key, None)
+            logging.getLogger("bhs_player.audio").info("AUDIO PREPARED cue=%s file=%r bytes=%s seconds=%.3f",cue.identifier,cue.audio_file,pcm.nbytes,time.monotonic()-started)
         except Exception as exc:
+            logging.getLogger("bhs_player.audio").error("AUDIO PREPARE FAILED cue=%s file=%r reason=%s", cue.identifier, cue.audio_file, exc)
             with self._prep_lock:
                 self._prepare_errors[key] = str(exc)
+        finally:
+            with self._prep_lock:
+                self._preparing.discard(key)
+                self._prepare_jobs.pop(key, None)
 
     def prepare_blocking(self, cue: Cue) -> None:
-        """Prepare now (used by GO when the preload has not finished)."""
+        """Bounded synchronous API for offline callers; GUI never uses this."""
+        self.prepare_async(cue)
         key = self._prep_key(cue)
         with self._prep_lock:
-            done = key in self._prepared
-        if not done:
-            self._prepare_sync(cue, key)
-        with self._prep_lock:
-            err = self._prepare_errors.get(key)
-        if err:
-            raise RuntimeError(err)
+            job = self._prepare_jobs.get(key)
+        if job:
+            job.join(timeout=45)
+        status, error = self.preparation_status(cue)
+        if status != "ready":
+            raise RuntimeError(error or "Audio preparation did not finish.")
 
     # -- playback ------------------------------------------------------------
     def start(self, cue: Cue, pcm: Optional[np.ndarray] = None,
@@ -463,12 +438,16 @@ class AudioEngine:
             voice = Voice(cue, pcm, sample_rate)  # already at mixer rate
         else:
             voice = Voice(cue, pcm, sample_rate, target_rate=self.mixer.sample_rate)
+        from .safe_decode import DECODE_LIMIT
+        if sum(v.pcm.nbytes for v, _ in self._instances.values() if v.active) + voice.pcm.nbytes > 2*DECODE_LIMIT:
+            raise RuntimeError("Active audio exceeds the 256 MiB safety budget; stop some playback first.")
         self.mixer.add_voice(voice)
         inst = SoundInstance(
             cue_internal_id=cue.internal_id,
             identifier=cue.identifier,
             name=cue.name,
             looping=cue.loop,
+            playback_number=self._counter + 1,
         )
         self._instances[self._counter] = (voice, inst)
         self._counter += 1
@@ -477,16 +456,30 @@ class AudioEngine:
     def decode_cue(self, cue: Cue) -> tuple[np.ndarray, int]:
         """Decode+resample a cue to mixer rate, using the prepared cache.
         Raises on failure. Call before applying destructive behavior."""
-        key = self._prep_key(cue)
+        key = self._prep_key(cue,refresh=True)
         with self._prep_lock:
             prepared = self._prepared.get(key)
         if prepared is None:
+            if self.nonblocking:
+                self.prepare_async(cue)
+                raise RuntimeError(self.preparation_status(cue)[1])
             self.prepare_blocking(cue)
             with self._prep_lock:
                 prepared = self._prepared.get(key)
         if prepared is None:
             raise RuntimeError(self._prepare_errors.get(key, "preparation failed"))
         return prepared.pcm, prepared.sample_rate
+
+    def check_start_capacity(self, cue, pcm):
+        from ..cues.model import OnGoBehavior
+        from .safe_decode import DECODE_LIMIT
+        active = [voice for voice, inst in self._instances.values() if voice.active]
+        if cue.on_go_behavior is OnGoBehavior.STOP_ALL:
+            active = []
+        elif cue.on_go_behavior is OnGoBehavior.STOP_PREVIOUS:
+            active = active[:-1]
+        if sum(v.pcm.nbytes for v in active) + pcm.nbytes > 2*DECODE_LIMIT:
+            raise RuntimeError("Active audio exceeds the 256 MiB safety budget; stop some playback first.")
 
     def start_prepared(self, cue: Cue, pcm: np.ndarray, sample_rate: int):
         """Start an already-decoded cue (no decode on the GO path)."""
@@ -498,8 +491,12 @@ class AudioEngine:
         Isolated from the show: it does not touch the Armed Cue, completion
         states, or pointer, and its end does not drive show advancement.
         """
-        pcm, sr = load_segment_mono_or_stereo(path, cue)
-        inst = self.start(cue, pcm=pcm, sample_rate=sr)
+        test_cue = replace(cue, audio_file=str(Path(path).resolve()))
+        if self.nonblocking:
+            pcm, sr = self.decode_cue(test_cue)
+        else:
+            pcm, sr = load_segment_mono_or_stereo(path, test_cue, self.mixer.sample_rate)
+        inst = self.start(test_cue, pcm=pcm, sample_rate=sr)
         inst.is_test = True
         return inst
 
@@ -520,6 +517,28 @@ class AudioEngine:
             instance.stopped = True
             self._drop(instance)
             self._emit_ended(instance, natural=False)
+
+    def set_instance_level(self, instance, level: float) -> bool:
+        """Change one live voice, without changing its cue or bus level."""
+        level = float(level)
+        if not np.isfinite(level) or level < 0 or level > 4:
+            raise ValueError("Playback level must be between 0 and 400 percent.")
+        with self.mixer._lock:
+            voice = self._find(instance)
+            if voice is None or not voice.active:
+                return False
+            voice._gain = level
+            return True
+
+    def set_instance_repeat(self, instance, repeat: bool) -> bool:
+        """Off finishes the current iteration; on repeats the configured segment."""
+        with self.mixer._lock:
+            voice = self._find(instance)
+            if voice is None or not voice.active:
+                return False
+            voice.looping = bool(repeat)
+            instance.looping = voice.looping
+            return True
 
     def fade_instance(self, instance, duration: float) -> None:
         v = self._find(instance)

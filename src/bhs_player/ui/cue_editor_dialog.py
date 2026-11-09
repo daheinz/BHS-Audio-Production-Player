@@ -10,6 +10,9 @@ from pathlib import Path
 from dataclasses import replace, fields
 from typing import Optional
 
+from PySide6.QtCore import Slot, QThreadPool
+from .background import FileTask
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -48,7 +51,7 @@ class CueEditorDialog(QDialog):
         self.play_folder = play_folder
         self.setWindowTitle(f"Advanced Cue Editor — {cue.identifier or '(new)'}")
         self.setModal(True)
-        self.resize(680, 740)
+        self.resize(900, 780)
 
         root = QVBoxLayout(self)
         form = QFormLayout()
@@ -109,7 +112,8 @@ class CueEditorDialog(QDialog):
         form.addRow("Volume", self.volume_spin)
 
         self.fade_in_spin = QDoubleSpinBox()
-        self.fade_in_spin.setRange(0.0, 60.0)
+        self.fade_in_spin.setDecimals(6)
+        self.fade_in_spin.setRange(0.0, max(86400.0, cue.fade_in))
         self.fade_in_spin.setSuffix(" s")
         self.fade_in_spin.setValue(cue.fade_in)
         self.fade_in_spin.setToolTip(
@@ -118,7 +122,8 @@ class CueEditorDialog(QDialog):
         form.addRow("Fade-In", self.fade_in_spin)
 
         self.fade_out_spin = QDoubleSpinBox()
-        self.fade_out_spin.setRange(0.0, 60.0)
+        self.fade_out_spin.setDecimals(6)
+        self.fade_out_spin.setRange(0.0, max(86400.0, cue.fade_out))
         self.fade_out_spin.setSuffix(" s")
         self.fade_out_spin.setValue(cue.fade_out)
         self.fade_out_spin.setToolTip(
@@ -130,19 +135,19 @@ class CueEditorDialog(QDialog):
         self.loop_check.setChecked(cue.loop)
         self.loop_check.setToolTip(
             "On: repeat the segment continuously until stopped or faded. "
-            "Must use Advance Mode 'On GO / Trigger' (looping never completes).")
+            "Must use Next Cue Action 'Arm Next Now' (looping never completes).")
         form.addRow("Loop", self.loop_check)
 
         self.advance_combo = QComboBox()
-        self.advance_combo.addItem("On Complete", AdvanceMode.ON_COMPLETE)
-        self.advance_combo.addItem("On GO / Trigger", AdvanceMode.ON_GO)
-        self.advance_combo.setCurrentIndex(
-            0 if cue.advance_mode is AdvanceMode.ON_COMPLETE else 1)
+        for mode in AdvanceMode:
+            self.advance_combo.addItem(mode.label, mode)
+        self.advance_combo.setCurrentIndex(self.advance_combo.findData(cue.advance_mode))
         self.advance_combo.setToolTip(
-            "On Complete: hold the pointer until the sound finishes, then arm "
-            "the next cue. On GO / Trigger: arm the next cue immediately so "
+            "Arm Next at End: wait for natural end, then arm the next cue. "
+            "GO on End: arm the next cue now, then execute it at natural end. "
+            "Arm Next Now: arm the next cue immediately so "
             "sounds can overlap; the sound keeps playing independently.")
-        form.addRow("Advance Mode", self.advance_combo)
+        form.addRow("Next Cue Action", self.advance_combo)
 
         self.behavior_combo = QComboBox()
         self.behavior_combo.addItem("Add Sound to Playing Stack", OnGoBehavior.ADD_TO_STACK)
@@ -156,6 +161,7 @@ class CueEditorDialog(QDialog):
         form.addRow("On GO Audio Behavior", self.behavior_combo)
 
         self.start_spin = QDoubleSpinBox()
+        self.start_spin.setDecimals(6)
         self.start_spin.setRange(0.0, 86400.0)
         self.start_spin.setSuffix(" s")
         self.start_spin.setSpecialValueText("(start of file)")
@@ -166,6 +172,7 @@ class CueEditorDialog(QDialog):
         form.addRow("Start Position", self.start_spin)
 
         self.end_spin = QDoubleSpinBox()
+        self.end_spin.setDecimals(6)
         self.end_spin.setRange(0.0, 86400.0)
         self.end_spin.setSuffix(" s")
         self.end_spin.setSpecialValueText("(end of file)")
@@ -193,7 +200,8 @@ class CueEditorDialog(QDialog):
         form.addRow(self.target_label, self.target_combo)
 
         self.fade_dur_spin = QDoubleSpinBox()
-        self.fade_dur_spin.setRange(0.0, 300.0)
+        self.fade_dur_spin.setDecimals(6)
+        self.fade_dur_spin.setRange(0.0, max(86400.0, cue.fade_duration))
         self.fade_dur_spin.setSuffix(" s")
         self.fade_dur_spin.setValue(cue.fade_duration)
         self.fade_dur_spin.setToolTip(
@@ -216,18 +224,69 @@ class CueEditorDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
-        root.addWidget(scroll)
+        from .clip_editor import ClipEditor
+        self.clip_editor = ClipEditor(self)
+        self.clip_editor.setMaximumHeight(260)
+        root.addWidget(self.clip_editor)
+        root.addWidget(scroll, 1)
 
         self.error_lbl = QLabel("")
         self.error_lbl.setProperty("tone", "error")
         root.addWidget(self.error_lbl)
 
+        self._import_job = None
+        self._import_cancelled = False
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
+        self._timing_baseline = {key: spin.value() for key, spin in self._timing_spins().items()}
+        self.clip_editor.edited.connect(self._graph_edited)
+        for spin in (self.start_spin, self.end_spin, self.fade_in_spin, self.fade_out_spin, self.fade_dur_spin):
+            spin.setDecimals(6)
+            spin.setSingleStep(.1)
+            spin.valueChanged.connect(self._sync_graph_values)
+        self.file_row.textChanged.connect(self._refresh_graph)
+        self.target_combo.currentIndexChanged.connect(self._refresh_graph)
+        self.action_combo.currentIndexChanged.connect(self._refresh_graph)
+        self.loop_check.toggled.connect(self._refresh_graph)
+        self._refresh_graph()
         self._update_enabled()
+
+    def _timing_spins(self):
+        return dict(start_position=self.start_spin, end_position=self.end_spin,
+                    fade_in=self.fade_in_spin, fade_out=self.fade_out_spin,
+                    fade_duration=self.fade_dur_spin)
+
+    def _graph_values(self):
+        result = {}
+        for key, spin in self._timing_spins().items():
+            if spin.value() == self._timing_baseline[key]:
+                result[key] = getattr(self.cue, key)
+            else:
+                result[key] = (spin.value() or None) if key in ('start_position','end_position') else spin.value()
+        return result
+
+    def _refresh_graph(self, *_):
+        draft = replace(self.cue, action=self.action_combo.currentData(),
+                        audio_file=self.file_row.text().strip() or None,
+                        target_internal_id=self.target_combo.currentData(),
+                        loop=self.loop_check.isChecked(), **self._graph_values())
+        if hasattr(self.cue, '_preview_waveform'):
+            draft._preview_waveform = self.cue._preview_waveform
+        self.clip_editor.set_cue(draft, self.cue_set, self.play_folder)
+
+    def _sync_graph_values(self, *_):
+        self.clip_editor.set_values(self._graph_values())
+
+    def _graph_edited(self, values):
+        for key, spin in (('start_position',self.start_spin), ('end_position',self.end_spin),
+                          ('fade_in',self.fade_in_spin), ('fade_out',self.fade_out_spin), ('fade_duration',self.fade_dur_spin)):
+            blocked = spin.blockSignals(True)
+            spin.setValue(values.get(key) or 0)
+            spin.blockSignals(blocked)
+        self._sync_graph_values()
 
     # -- enable/disable fields by action type ------------------------------
     def _update_enabled(self):
@@ -258,13 +317,39 @@ class CueEditorDialog(QDialog):
             "Audio Files (*.wav *.mp3 *.flac *.aac *.m4a *.ogg);;All Files (*)")
         if not path:
             return
+        if self._import_job is not None:
+            self.error_lbl.setText("An audio check is already running.")
+            return
+        from ..audio.safe_decode import inspect_audio
+        self._import_job = FileTask(lambda: (inspect_audio(path, full=True), path))
+        self._import_job.signals.done.connect(self._audio_checked)
+        self.error_lbl.setText("Checking audio before import...")
+        QThreadPool.globalInstance().start(self._import_job)
+
+    @Slot(object, str)
+    def _audio_checked(self, result, error):
+        self._import_job = None
+        if self._import_cancelled:
+            return
+        if error:
+            self.error_lbl.setText("Audio import rejected: " + error[:220] + " See Diagnostics / Logs.")
+            return
         try:
-            rel = self.play_folder.import_audio(Path(path))
+            _, path = result
+            rel = self.play_folder.import_audio(Path(path), prevalidated=True)
             self.file_row.setText(str(rel).replace("\\", "/"))
+            self.error_lbl.setText("")
         except Exception as exc:
-            QMessageBox.critical(self, "Import Failed", str(exc))
+            self.error_lbl.setText("Audio import rejected: " + str(exc)[:220])
+
+    def done(self, result):
+        self._import_cancelled = True
+        super().done(result)
 
     def _on_accept(self):
+        if self._import_job is not None:
+            self.error_lbl.setText("Wait for the audio import check, or Cancel.")
+            return
         identifier = self.ident_edit.text().strip()
         if not validate_identifier(identifier):
             self.error_lbl.setText(
@@ -285,22 +370,23 @@ class CueEditorDialog(QDialog):
         if action is ActionType.PLAY:
             cue.audio_file = self.file_row.text().strip() or None
             cue.volume = self.volume_spin.value() / 100.0  # shown as percent
-            cue.fade_in = self.fade_in_spin.value()
-            cue.fade_out = self.fade_out_spin.value()
+            cue.fade_in = self._graph_values()["fade_in"]
+            cue.fade_out = self._graph_values()["fade_out"]
             cue.loop = self.loop_check.isChecked()
             cue.advance_mode = self.advance_combo.currentData()
             cue.on_go_behavior = self.behavior_combo.currentData()
-            sp = self.start_spin.value()
-            ep = self.end_spin.value()
-            cue.start_position = sp if sp > 0 else None
-            cue.end_position = ep if ep > 0 else None
+            cue.start_position = self._graph_values()["start_position"]
+            cue.end_position = self._graph_values()["end_position"]
             if cue.start_position is not None and cue.end_position is not None \
                     and cue.start_position >= cue.end_position:
                 self.error_lbl.setText("Start Position must be before End Position.")
                 return
             if cue.loop and cue.advance_mode is AdvanceMode.ON_COMPLETE:
                 self.error_lbl.setText(
-                    "Loop On cannot use Advance Mode On Complete (Section 7).")
+                    "Loop requires Arm Next Now; it cannot finish naturally.")
+                return
+            if self.clip_editor.data and not cue.segment_valid(self.clip_editor.data.duration):
+                self.error_lbl.setText("Start / End must be within the source recording.")
                 return
             cue.target_internal_id = None
         else:
@@ -309,7 +395,7 @@ class CueEditorDialog(QDialog):
                 self.target_combo.currentData() if action in (ActionType.STOP, ActionType.FADE)
                 else None)
             cue.fade_duration = (
-                self.fade_dur_spin.value() if action is ActionType.FADE else 0.0)
+                self._graph_values()["fade_duration"] if action is ActionType.FADE else 0.0)
             if action in (ActionType.STOP, ActionType.FADE) and not cue.target_internal_id:
                 self.error_lbl.setText("Choose a target PLAY cue.")
                 return

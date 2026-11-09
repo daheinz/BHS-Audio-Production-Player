@@ -10,6 +10,8 @@ ready flips False and the operator must deliberately select a replacement.
 from __future__ import annotations
 
 import threading
+import time
+import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -21,6 +23,9 @@ except Exception:  # pragma: no cover
     sd = None
 
 from .engine import BLOCK, SAMPLE_RATE, MeterReading, Mixer, _to_db
+from .health import AudioHealth, HealthSnapshot
+
+log = logging.getLogger("bhs_player.audio")
 
 
 @dataclass
@@ -73,6 +78,7 @@ class OutputStream:
         self._running = False
         self._lost = threading.Event()
         self.last_meter = MeterReading()
+        self.health = AudioHealth()
         self.on_output_lost: Optional[Callable[[str], None]] = None
         self.on_meter: Optional[Callable[[MeterReading], None]] = None
 
@@ -95,6 +101,7 @@ class OutputStream:
         if self._running:
             return
         self._lost.clear()
+        self.health = AudioHealth()
         self._stream = sd.OutputStream(
             samplerate=self.sample_rate,
             blocksize=self.blocksize,
@@ -116,7 +123,30 @@ class OutputStream:
                 pass
             self._stream = None
 
+    def health_snapshot(self):
+        cpu_load, latency = self.health.load, None
+        if self._stream is not None:
+            try:
+                cpu_load = float(self._stream.cpu_load)
+                latency = float(self._stream.latency)
+            except Exception:  # A device can disappear while diagnostics are read.
+                pass
+        h = self.health
+        return HealthSnapshot(self.running, cpu_load, h.peak_load, h.underflows,
+                              h.overruns, h.clipped_blocks, h.callbacks,
+                              h.last_underflow, h.last_overrun, h.last_clip,
+                              self.sample_rate, self.blocksize, latency)
+
     def _callback(self, outdata, frames, time_info, status) -> None:
+        started = time.perf_counter()
+        underflow = bool(getattr(status, "output_underflow", False))
+        try:
+            self._render_callback(outdata, frames, time_info, status)
+        finally:
+            self.health.record(time.perf_counter()-started, frames, self.sample_rate,
+                               underflow, self.last_meter.clipped)
+
+    def _render_callback(self, outdata, frames, time_info, status) -> None:
         # PortAudio status flags catch device removal even when no exception
         # is raised (e.g. priming/underflow errors on a vanished device).
         if status and getattr(status, "output_underflow", False) is False:
@@ -168,6 +198,11 @@ class StreamingAudioBackend:
         self.output_lost_reason: str = ""
         self.on_output_lost: Optional[Callable[[str], None]] = None
         self.selected_identity: Optional[str] = None  # stable "name [api]"
+        self._diagnostic_stream = None
+        self._diagnostic_counts = (0, 0, 0)
+        self._diagnostic_time = 0.0
+        self._summary_time = 0.0
+        self._reported_loss = ""
 
     def select_device(self, device_index: Optional[int]) -> bool:
         """Deliberately select and prepare a device. Returns True on success.
@@ -175,19 +210,57 @@ class StreamingAudioBackend:
         self.stop()
         self.output_lost = False
         self.output_lost_reason = ""
+        self._reported_loss = ""
         try:
             self.stream = OutputStream(self.engine.mixer, device_index=device_index)
             self.stream.on_output_lost = self._handle_lost
             self.stream.start()
             self.engine.set_ready(True)
             self.selected_identity = self._identity_of(device_index)
+            log.info("OUTPUT START device=%r index=%s sample_rate=%s blocksize=%s",
+                     self.selected_identity, device_index,
+                     getattr(self.stream, 'sample_rate', None), getattr(self.stream, 'blocksize', None))
             return True
         except Exception as exc:
             self.engine.set_ready(False)
             self.stream = None
             self.output_lost = True
             self.output_lost_reason = str(exc)
+            log.exception("OUTPUT START FAILED index=%s", device_index)
             return False
+
+    def poll_diagnostics(self, force=False):
+        """Read measurements and log deltas on the control thread, never audio."""
+        stream = self.stream
+        snapshot = stream.health_snapshot() if stream and hasattr(stream, 'health_snapshot') else None
+        now = time.monotonic()
+        if not force and now-self._diagnostic_time < 1:
+            return snapshot
+        self._diagnostic_time = now
+        if self.output_lost and self.output_lost_reason != self._reported_loss:
+            self._reported_loss = self.output_lost_reason
+            log.error("OUTPUT LOST device=%r reason=%s", self.selected_identity, self.output_lost_reason)
+        if snapshot is None:
+            return None
+        if stream is not self._diagnostic_stream:
+            self._diagnostic_stream = stream
+            self._diagnostic_counts = (0, 0, 0)
+            self._summary_time = 0
+        counts = (snapshot.underflows, snapshot.overruns, snapshot.clipped_blocks)
+        delta = tuple(new-old for new,old in zip(counts, self._diagnostic_counts))
+        active = [(i.identifier, getattr(i, 'playback_number', 0)) for i in self.engine.active_instances()]
+        if any(delta):
+            log.warning("AUDIO HEALTH underflows=+%s total=%s overruns=+%s total=%s clipped_blocks=+%s total=%s load=%.1f%% peak=%.1f%% device=%r active=%s",
+                        delta[0], counts[0], delta[1], counts[1], delta[2], counts[2],
+                        snapshot.load*100, snapshot.peak_load*100, self.selected_identity, active)
+            self._diagnostic_counts = counts
+        if now-self._summary_time >= 10:
+            log.info("AUDIO STATUS running=%s load=%.1f%% peak=%.1f%% underflows=%s overruns=%s clipped_blocks=%s callbacks=%s sample_rate=%s blocksize=%s latency=%s device=%r active=%s",
+                     snapshot.running, snapshot.load*100, snapshot.peak_load*100,
+                     *counts, snapshot.callbacks, snapshot.sample_rate, snapshot.blocksize,
+                     snapshot.latency, self.selected_identity, active)
+            self._summary_time = now
+        return snapshot
 
     @staticmethod
     def _identity_of(device_index: Optional[int]) -> Optional[str]:
@@ -222,5 +295,7 @@ class StreamingAudioBackend:
 
     def stop(self) -> None:
         if self.stream is not None:
+            self.poll_diagnostics(force=True)
             self.stream.stop()
+            log.info("OUTPUT STOP device=%r", self.selected_identity)
             self.stream = None

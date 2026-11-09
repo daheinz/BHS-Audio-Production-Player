@@ -61,7 +61,8 @@ def test_go_button_triggers_and_shows_playing(qapp):
     win._go()
     win._refresh()
     assert cs.cues[0].execution_state is CueExecutionState.PLAYING
-    assert "WAITING" in win.armed_lbl.text()  # On Complete holds pointer
+    assert win.armed_lbl.text() == "No cue armed"  # Waiting is not an armed cue
+    assert "Waiting for 1.0" in win.armed_detail.text()
     assert not win.go_btn.isEnabled()
 
 
@@ -89,7 +90,7 @@ def test_stop_all_leaves_nothing_armed(qapp):
     win._stop_all()
     assert audio.active_instances() == []
     assert engine.armed_cue is None
-    assert "ARM CUE" in win.status_lbl.text()
+    assert "ARM button" in win.status_lbl.text()
 
 
 def test_playing_stack_shows_active_sound(qapp):

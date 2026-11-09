@@ -9,9 +9,9 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QSizePolicy
 
 from ..audio.engine import Voice, _to_db
 
@@ -101,8 +101,14 @@ class LevelMeter(QWidget):
         self._left = -math.inf
         self._right = -math.inf
         self._clipped = False
-        self.setMinimumHeight(30)
-        self.setMinimumWidth(160)
+        # 144 logical pixels is approximately 1.5 inches at standard UI scaling.
+        self.setFixedWidth(144)
+        self.setFixedHeight(28)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setToolTip("Application signal level (dBFS), left above right. This does not confirm sound at the speakers.")
+
+    def sizeHint(self):
+        return QSize(144, 28)
 
     def set_levels(self, left_db: float, right_db: float, clipped: bool) -> None:
         self._left, self._right, self._clipped = left_db, right_db, clipped
