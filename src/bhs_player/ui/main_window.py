@@ -607,14 +607,12 @@ class MainWindow(QMainWindow):
                 widget.style().unpolish(widget)
                 widget.style().polish(widget)
 
-        # Warm one successor ahead on the control thread; RAM and disk caches
-        # reuse its decoded data without repeated validation or helper startup.
+        # Prepare the armed cue first, then use spare work for one successor.
+        ok, reason = self.engine.go_available()
         if armed and getattr(self.audio,'nonblocking',False) and not self.preview:
             following=self.cue_set.next_after(armed.internal_id)
             if following and following.is_play_sound() and following.audio_file:
                 self.audio.prepare_async(following,refresh=False)
-        # GO availability
-        ok, reason = self.engine.go_available()
         self.go_btn.setEnabled(ok and not self.preview)
         self.go_btn.setToolTip(reason if not ok else "Execute the armed cue (Spacebar)")
         self.notes_lbl.setText(armed.notes if armed else "")

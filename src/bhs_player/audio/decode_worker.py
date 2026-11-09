@@ -1,5 +1,6 @@
 """Disposable decoder process. Never imported for decoding in the GUI process."""
 import json
+import hashlib
 import sys
 import os
 import faulthandler
@@ -45,6 +46,12 @@ def open_source(path, request):
                     output.write(data)
         return sf.SoundFile(converted)
 
+def tolerable_mp3_eof(format_name, frames, sample_rate, end, count, remaining):
+    """Accept only a small clean MP3 tail discrepancy at the physical end."""
+    return (format_name == "MP3" and end >= frames - 1 and count > 0
+            and 0 < remaining <= int(sample_rate * 0.25))
+
+
 def main():
     request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     result_path = Path(request["result"])
@@ -79,10 +86,16 @@ def main():
                 while remaining:
                     block = sound.read(min(65536, remaining), dtype="float32", always_2d=True)
                     if not len(block):
+                        if tolerable_mp3_eof(sound.format, frames, sr, end, count, remaining):
+                            result["decoded_duration"] = (start + count) / sr
+                            result["diagnostic_warning"] = (
+                                f"Clean MP3 end {remaining/sr:.3f}s before reported length; "
+                                "using available samples.")
+                            break
                         raise ValueError("Decoder ended before the declared audio length; file may be truncated.")
                     if not np.isfinite(block).all():
                         raise ValueError("Decoder returned invalid audio samples.")
-                    if mode == "decode":
+                    if mode in ("decode","validate"):
                         chunks.append(block)
                     elif mode == "waveform":
                         indices = (count + np.arange(len(block)))//bucket_size
@@ -91,7 +104,7 @@ def main():
                             np.maximum.at(high[:,channel],indices,block[:,channel])
                     count += len(block)
                     remaining -= len(block)
-                if mode == "decode":
+                if mode in ("decode","validate"):
                     pcm = np.concatenate(chunks, axis=0)
                     chunks.clear()
                     if sr != target:
@@ -107,9 +120,14 @@ def main():
                     if pcm.nbytes > limit:
                         raise ValueError("Decoded audio exceeds the safety limit.")
                     np.save(request["output"],pcm,allow_pickle=False)
-                    result["sample_rate"] = target
+                    result["source_sample_rate"] = sr
+                    result["pcm_sample_rate"] = target
+                    if mode=="decode":result["sample_rate"] = target
                 elif mode == "waveform":
                     np.savez(request["output"],minimum=low,maximum=high)
+        if mode in ("decode","validate"):
+            with open(path,"rb") as source:
+                result["source_sha256"] = hashlib.file_digest(source,"sha256").hexdigest()
         result_path.write_text(json.dumps(result),encoding="utf-8")
     except BaseException as exc:
         result_path.write_text(json.dumps({"error": str(exc) or type(exc).__name__}),encoding="utf-8")

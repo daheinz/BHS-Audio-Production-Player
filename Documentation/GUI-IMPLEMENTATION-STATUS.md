@@ -163,3 +163,12 @@ Compact performance-table follow-up: Show/Rehearse hide Audio File, use Cue / Bu
 
 
 Decoder memory-overhead follow-up: reproduced ordinary MP3 preparation failing a 512 KiB allocation because NumPy/OpenBLAS committed roughly 500 MiB for its default worker thread pool. Decoder child environments now constrain numerical-library pools to one thread; the player environment and all safety limits are retained. Real Clue 26 cues 1, 7, and 34 decode offline successfully, and suspect cue 36 is still rejected. Current suite: 333 passing tests, including the new large-parent-thread-pool regression. A full relaunch clears cached failures.
+
+
+## Persistent preparation/validation and recent-play ordering
+
+Implemented both deferred requests and the preparation optimization. Successful validation/metadata persists by file identity; PCM is retained in a bounded local disk cache and generated during import checking. Identical content can share converted data despite differing filenames. RAM access uses LRU, one successor preloads after the armed cue is prioritized, and source identity polling is throttled while GO and worker completion still recheck identity. Manual Recheck Audio performs a fresh full scan and refreshes prepared state. Quick cue/routing/output readiness checks remain at mode entry. Cold uncached legacy clips still require guarded decoding.
+
+Open Play records last successful version/recovery/named-launch opens in application settings; failures and cancellations leave recency unchanged. Never-opened productions fall back alphabetically and save/version timestamps do not determine order. Cache data is outside the synced workspace under LocalAppData, with 512 MiB decoded disk and 1,024 metadata-entry bounds; production formats and source files remain unchanged.
+
+Current suite: 347 tests pass, including thirteen new cache/recency checks. Offline real-asset timing showed cue 43 content reuse at ~0.11 s and cue 34 reload at ~0.08 s; validation reuse was ~13 ms in another check. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md). Physical audio/performance verification remains outstanding.

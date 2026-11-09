@@ -41,7 +41,7 @@ The real `36 benny hill.mp3` was rejected by the import decoded-size check in ap
 
 ## Verification
 
-The full suite has 333 passing tests. Twenty focused safety cases cover isolated decode/resampling/waveforms, killed timeouts, native error output, unexpected exits, memory/cache limits, transactional import rejection/source changes, responsive UI, duplicate preparation suppression, queued automatic GO, safe Stop Previous failure, file replacement, pending/canceled import handling, canceled TEST, asynchronous mode entry, and absence of file preparation in the live audio callback. Existing placeholder-byte import fixtures now use real WAV assets. Physical audibility and device reliability remain separate verification.
+The full suite has 347 passing tests. Twenty focused safety cases cover isolated decode/resampling/waveforms, killed timeouts, native error output, unexpected exits, memory/cache limits, transactional import rejection/source changes, responsive UI, duplicate preparation suppression, queued automatic GO, safe Stop Previous failure, file replacement, pending/canceled import handling, canceled TEST, asynchronous mode entry, and absence of file preparation in the live audio callback. Existing placeholder-byte import fixtures now use real WAV assets. Physical audibility and device reliability remain separate verification.
 
 
 Implementation reference: Windows isolation uses [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects), including the documented process-memory and kill-on-job-close flags.
@@ -52,3 +52,15 @@ Implementation reference: Windows isolation uses [Microsoft Job Objects](https:/
 An ordinary cue (`7 thunder.mp3`, about 13 MiB of decoded audio) exposed a false rejection: the default NumPy/OpenBLAS thread pool committed about 500 MiB before audio decoding, leaving too little room under the 512 MiB worker limit. Decoder subprocesses now explicitly use one numerical-library thread (OpenBLAS/OMP/MKL/BLIS/NumExpr), without changing the player process's environment. Timeout, job-memory, PCM, and cache limits remain enforced.
 
 Offline checks now decode the real Clue 26 cues 1, 7, and 34 successfully, while cue 36 remains blocked by the decoded-data safety limit. The regression suite includes a 30-second stereo decode with a deliberately large parent thread-pool environment. Fully relaunch the application after this update to load the fix and clear prior cached preparation failures.
+
+
+## Preparation/cache update
+
+The player now retains successful validation, metadata, and playback-ready PCM in a bounded local cache across launches. Import checks prepare reusable PCM; identical audio under different names can share it. One upcoming cue preloads ahead, RAM reuse is LRU, and repetitive UI file-identity polling is throttled. GO still checks current identity and retains all safety protections. Uncached legacy/changed clips or disk-evicted entries can still need initial decoding.
+
+Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordered by last successful open, not last save. Diagnostics logs record decoded-cache hits and preparation elapsed time. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md) for cache location/limits, first-use behavior, and measured offline timings.
+
+
+### Small MP3 end-length discrepancies
+
+A clean MP3 decoder EOF up to 0.25 seconds before the reported end is accepted at the physical file end and logged as `AUDIO LENGTH ADJUSTMENT`. Playback uses the samples actually decoded. Reported duration remains available for compatibility with existing saved trim endpoints. Explicit earlier trim endpoints, empty audio, larger shortfalls, native decoder warnings, timeouts, and memory limits retain their protections. This fixes cue 41 being armed but blocked from GO after cue 39; restart the application to clear previously cached preparation failures.

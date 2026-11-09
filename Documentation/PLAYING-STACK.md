@@ -41,7 +41,7 @@ Automated callback tests verify identical nonzero sample buffers across Rehearse
 
 The full-height cue list occupies the left two-thirds. The bottom strip holds status and compact GO / STOP ALL controls; it has no ARM CUE button. Space executes an enabled GO; Ctrl+Shift+S invokes the existing immediate Stop All. Stop All preserves existing handling of an independently armed cue, so do not assume it always disarms. Up/Down select table rows without arming; Enter arms them. See [Show/Rehearse guide](SHOW-MODE.md) for state colors, shortcut protection, completion choices, and readiness limitations.
 
-The renderer also writes `output/gui-review/playing-stack-small.png` at 1000 by 700 to inspect resizing. The current full suite has 333 passing tests.
+The renderer also writes `output/gui-review/playing-stack-small.png` at 1000 by 700 to inspect resizing. The current full suite has 347 passing tests.
 
 
 ## Live playback level and repeat
@@ -78,3 +78,10 @@ New imports are fully checked before copying or changing cue references. Native 
 
 
 Show/Rehearse cue columns now use compact widths, hide Audio File, and label the ID and output columns Cue and Bus. Full text remains available on hover and columns can be resized. Their width preferences are shared between Show and Rehearse but kept separately from Edit, whose columns remain unchanged.
+
+
+## Preparation/cache update
+
+The player now retains successful validation, metadata, and playback-ready PCM in a bounded local cache across launches. Import checks prepare reusable PCM; identical audio under different names can share it. One upcoming cue preloads ahead, RAM reuse is LRU, and repetitive UI file-identity polling is throttled. GO still checks current identity and retains all safety protections. Uncached legacy/changed clips or disk-evicted entries can still need initial decoding.
+
+Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordered by last successful open, not last save. Diagnostics logs record decoded-cache hits and preparation elapsed time. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md) for cache location/limits, first-use behavior, and measured offline timings.

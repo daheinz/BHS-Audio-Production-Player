@@ -9,6 +9,7 @@ from .theme import ViewingModeControl
 from .settings import application_settings
 import hashlib
 import time
+import math
 
 from pathlib import Path
 from typing import Optional
@@ -103,7 +104,9 @@ class OpenPlayDialog(QDialog):
         return 'library/last_opened/'+identity
 
     def _last_opened(self, folder):
-        try:return float(self.settings.value(self._opened_key(folder),0))
+        try:
+            value=float(self.settings.value(self._opened_key(folder),0))
+            return value if math.isfinite(value) and value>=0 else 0
         except (TypeError,ValueError):return 0
 
     def _mark_opened(self, folder):

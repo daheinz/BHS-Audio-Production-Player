@@ -374,3 +374,12 @@ def test_decoder_overrides_large_parent_thread_pools_and_decodes_normal_clip(tmp
     np.testing.assert_allclose(pcm,.1)
     assert seen and all(environment["OPENBLAS_NUM_THREADS"]=="1" and environment["OMP_NUM_THREADS"]=="1" for environment in seen)
     assert os.environ["OPENBLAS_NUM_THREADS"]=="64"  # Parent environment is untouched.
+
+
+def test_small_clean_mp3_eof_is_allowed_only_at_file_end():
+    from bhs_player.audio.decode_worker import tolerable_mp3_eof
+    assert tolerable_mp3_eof('MP3',171610,44100,171610,162432,9178)
+    assert not tolerable_mp3_eof('WAV',171610,44100,171610,162432,9178)
+    assert not tolerable_mp3_eof('MP3',171610,44100,171610,150000,21610)
+    assert not tolerable_mp3_eof('MP3',171610,44100,165000,162432,2568)
+    assert not tolerable_mp3_eof('MP3',1000,44100,1000,0,1000)

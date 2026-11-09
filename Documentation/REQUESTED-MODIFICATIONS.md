@@ -109,20 +109,20 @@ Decoder/import safeguard follow-up: completed isolated and bounded decoder work,
 Decoder allocation fix: numerical-library worker pools are restricted to one thread so their baseline committed memory does not consume the safety budget. Real cues 1, 7, and 34 pass offline decoding; the suspect cue remains blocked. Safety limits stay enabled. See [Audio safety guide](AUDIO-SAFETY.md).
 
 
-## Pending: Open Play list ordered by last opened
+## Completed: Open Play list ordered by last opened
 
-Status: Requested; deferred. Do not implement until scheduled.
+Status: Implemented. Successful version, recovery, and named-launch opens update application recency; failed/canceled opens do not.
 
 - Sort productions in the Open Play list by when they were last successfully opened, most recently opened first.
 - Track last-opened time separately from save/version timestamps.
 - Use a stable fallback order for productions that have not been opened before.
 
 
-## Pending: Reuse audio validation across launches and mode entry
+## Completed: Reuse audio validation across launches and mode entry
 
-Status: Requested; deferred. No application behavior changed.
+Status: Implemented, including persistent results and an explicit Recheck Audio action.
 
-Current behavior: importing performs a full validation; Show/Rehearse entry runs readiness checks including audio metadata probes. Cached results avoid repeated probes during one application session, but the cache is memory-only and is lost on application exit, so subsequent launches probe files again.
+Current behavior: import validation and metadata results persist locally by file identity. Unchanged assets reuse those results across launches; missing/changed or uncached legacy assets are checked as needed. Mode entry retains lightweight cue/output readiness checks.
 
 - Persist successful import validation and audio metadata so unchanged assets do not need decoder-based rechecking on every launch or Show/Rehearse entry.
 - Use quick file existence/change checks to identify missing, replaced, or modified assets; revalidate only new or changed files (and previously unvalidated legacy assets).
@@ -130,3 +130,23 @@ Current behavior: importing performs a full validation; Show/Rehearse entry runs
 - Keep playback preparation and decoder timeout/memory protections; preparing audio for playback is separate from validating an import.
 - Retain an explicit manual Recheck Audio action for troubleshooting.
 - Make progress/status text distinguish validation, readiness checks, and playback preparation.
+
+
+## Completed: Faster arming and playback preparation
+
+- Reuse decoded PCM from a bounded persistent local cache after RAM eviction or application restart.
+- Preserve playback-ready PCM during import validation, including reuse after copying into a production.
+- Share cached PCM for identical source content under different filenames; verify changed content via file identity before reuse.
+- Warm the next audio cue while the armed cue is ready/preparing, prioritizing the armed cue.
+- Use RAM LRU access and throttle repeated UI file-identity reads to approximately once per second; GO and completed decoder jobs still check current identity.
+- Keep the 256 MiB RAM cache, 128 MiB per-clip limit, active-data budget, timeout, isolation, and corrupt-file protections. The local decoded disk cache is bounded at 512 MiB.
+- Explicit Recheck Audio bypasses validation results and refreshes preparation state. First-time uncached legacy playback or an evicted disk entry may still require decoding.
+
+See [Playback performance and recent plays](PLAYBACK-PERFORMANCE.md). Current full suite: 347 tests, including thirteen new cache/recency checks.
+
+
+### Small MP3 end-length discrepancies
+
+A clean MP3 decoder EOF up to 0.25 seconds before the reported end is accepted at the physical file end and logged as `AUDIO LENGTH ADJUSTMENT`. Playback uses the samples actually decoded. Reported duration remains available for compatibility with existing saved trim endpoints. Explicit earlier trim endpoints, empty audio, larger shortfalls, native decoder warnings, timeouts, and memory limits retain their protections. This fixes cue 41 being armed but blocked from GO after cue 39; restart the application to clear previously cached preparation failures.
+
+Verification: all 347 tests pass. Real cue 39 to cue 41 automatic continuation also passes with offline rendering (no hardware output).

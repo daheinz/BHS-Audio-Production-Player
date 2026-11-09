@@ -8,8 +8,8 @@ import tempfile
 import threading
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[3]/"output"/"audio-cache"
-VERSION = 1
+ROOT = Path(os.environ.get("LOCALAPPDATA",Path.home()/".cache"))/"BHS Audio Production Player"/"audio-cache"
+VERSION = 2
 PCM_BUDGET = 512*1024*1024
 _LOCK = threading.RLock()
 log = logging.getLogger("bhs_player.audio")
@@ -35,6 +35,7 @@ def read_metadata(key, full=False):
 
 def store_metadata(key, result, full=False):
     kind="validated" if full else "metadata"
+    staged=None
     try:
         with _LOCK:
             ROOT.mkdir(parents=True,exist_ok=True)
@@ -48,6 +49,10 @@ def store_metadata(key, result, full=False):
                 path.unlink(missing_ok=True)
     except OSError as exc:
         log.warning("AUDIO CACHE metadata write unavailable: %s",exc)
+    finally:
+        if staged is not None:
+            try:staged.unlink(missing_ok=True)
+            except OSError:pass
 
 
 def load_pcm(key, limit):
@@ -61,7 +66,8 @@ def load_pcm(key, limit):
             pcm=np.array(mapped,copy=True)
             if not np.isfinite(pcm).all():
                 return None
-            path.touch()
+            try:path.touch()
+            except OSError:pass
             return pcm
     except (OSError,ValueError,EOFError,MemoryError):
         return None
@@ -89,8 +95,9 @@ def store_pcm(key, pcm):
     except OSError as exc:
         log.warning("AUDIO CACHE PCM write unavailable: %s",exc)
     finally:
-        if staged is not None and staged.exists():
-            staged.unlink(missing_ok=True)
+        if staged is not None:
+            try:staged.unlink(missing_ok=True)
+            except OSError:pass
 
 
 def forget_metadata(key):

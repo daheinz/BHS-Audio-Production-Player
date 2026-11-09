@@ -95,6 +95,10 @@ class ProductionController(QObject):
         if self.edit.list.has_pending_imports:
             self.edit.status_lbl.setText("Wait for the audio import check to finish before entering a mode.")
             return
+        if getattr(self.edit,'_recheck_job',None) is not None:
+            self._entry_report=None
+            self.edit.status_lbl.setText("Wait for the full audio recheck to finish before entering a mode.")
+            return
         self.edit.list.setFocus()
         self.edit._stop_audition()
         self.routing.stop_test()
@@ -114,7 +118,7 @@ class ProductionController(QObject):
                     ready = self.audio.ready
                     self._entry_check = FileTask(lambda: (validate_show(checked_cues, folder, output_device_available=ready), snapshot, rehearsal))
                     self._entry_check.signals.done.connect(self._entry_checked)
-                    self.edit.status_lbl.setText("Checking cue settings, files and output readiness...")
+                    self.edit.status_lbl.setText("Checking cue and output readiness...")
                     QThreadPool.globalInstance().start(self._entry_check)
                 return
             report = self._entry_report or validate_show(self.cue_set, self.folder.folder if self.folder else None,

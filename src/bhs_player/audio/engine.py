@@ -333,6 +333,7 @@ class AudioEngine:
         self.nonblocking = nonblocking
         self._preparing = set()
         self._source_snapshots = {}
+        self._preparation_epoch = 0
         self._prepare_jobs = {}
         self._prepare_errors: dict[tuple, str] = {}
         self._prep_lock = threading.Lock()
@@ -356,7 +357,7 @@ class AudioEngine:
     # -- preparation / preload ---------------------------------------------
     def _prep_key(self, cue: Cue, refresh=False) -> tuple:
         from .safe_decode import fingerprint
-        path=str(self.resolve_audio_path(cue.audio_file))
+        path=str(self.resolve_audio_path(cue.audio_file)) if cue.audio_file else ""
         now=time.monotonic()
         snapshot=self._source_snapshots.get(path)
         if snapshot is not None and not refresh and now-snapshot[0]<1:
@@ -366,6 +367,14 @@ class AudioEngine:
             except (OSError,TypeError):source=(path,None,None)
             self._source_snapshots[path]=(now,source)
         return (source, cue.start_position, cue.end_position, self.mixer.sample_rate)
+
+    def clear_preparation(self):
+        """Explicit full recheck invalidates RAM snapshots and cached failures."""
+        with self._prep_lock:
+            self._preparation_epoch += 1
+            self._prepared.clear()
+            self._prepare_errors.clear()
+            self._source_snapshots.clear()
 
     def prepare_async(self, cue: Cue, refresh=True) -> None:
         if not cue.audio_file:
@@ -388,10 +397,11 @@ class AudioEngine:
                 return "ready", ""
             if key in self._prepare_errors:
                 return "failed", "Audio blocked: " + self._prepare_errors[key][:220] + " See Diagnostics / Logs."
-            return "preparing", "Preparing audio - GO will be available when ready."
+            return "preparing", "Preparing audio for playback - GO will be available when ready."
 
     def _prepare_sync(self, cue: Cue, key: tuple) -> None:
         started=time.monotonic()
+        epoch=self._preparation_epoch
         try:
             pcm, sr = load_segment_mono_or_stereo(
                 str(self.resolve_audio_path(cue.audio_file)), cue, self.mixer.sample_rate)
@@ -399,6 +409,8 @@ class AudioEngine:
                 raise RuntimeError("Audio changed during preparation; retry with the updated file.")
             from .safe_decode import DECODE_LIMIT
             with self._prep_lock:
+                if epoch != self._preparation_epoch:
+                    return
                 while self._prepared and sum(p.pcm.nbytes for p in self._prepared.values()) + pcm.nbytes > 2*DECODE_LIMIT:
                     self._prepared.popitem(last=False)
                 self._prepared[key] = _Prepared(pcm, sr, key)
@@ -407,7 +419,8 @@ class AudioEngine:
         except Exception as exc:
             logging.getLogger("bhs_player.audio").error("AUDIO PREPARE FAILED cue=%s file=%r reason=%s", cue.identifier, cue.audio_file, exc)
             with self._prep_lock:
-                self._prepare_errors[key] = str(exc)
+                if epoch == self._preparation_epoch:
+                    self._prepare_errors[key] = str(exc)
         finally:
             with self._prep_lock:
                 self._preparing.discard(key)

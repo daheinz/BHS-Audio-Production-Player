@@ -2,6 +2,7 @@
 from pathlib import Path
 from collections import OrderedDict
 import json
+import hashlib
 import logging
 import os
 import subprocess
@@ -47,7 +48,7 @@ def inspect_audio(path, full=False, force=False):
         if cached:
             with _LOCK:_CACHE[cache_key]=cached
             return dict(cached)
-    result, _ = _run(path, "validate" if full else "probe")
+    result, pcm = _run(path, "validate" if full else "probe",rate=44100 if full else None)
     if fingerprint(path) != key:
         raise RuntimeError("Audio changed while being checked; try again.")
     with _LOCK:
@@ -55,6 +56,8 @@ def inspect_audio(path, full=False, force=False):
         while len(_CACHE) > 128:
             _CACHE.popitem(last=False)
     disk_cache.store_metadata(key,result,full)
+    if full and pcm is not None:
+        disk_cache.store_pcm(_pcm_key(key,result,0,None,44100),pcm)
     return dict(result)
 
 
@@ -81,9 +84,31 @@ def remember_validated_copy(path, result):
             _CACHE.popitem(last=False)
     disk_cache.store_metadata(key,result,full=True)
 
+def _pcm_key(source,metadata,start,end,rate):
+    source_id=metadata.get('source_sha256') or source
+    if end is not None and metadata.get('duration') and abs(end-metadata['duration'])<1/metadata.get('sample_rate',44100):
+        end=None
+    return source_id,float(start or 0),float(end) if end is not None else None,rate
+
+
 def decode_audio(path, cue, rate):
     source=fingerprint(path)
-    key=(source,cue.start_position or 0,cue.end_position,rate)
+    with _LOCK:reason=_SUSPECT.get(source)
+    if reason:
+        raise RuntimeError("Suspect audio blocked: "+reason+". Replace or re-export the file.")
+    metadata=disk_cache.read_metadata(source) or {}
+    # Many productions give identical audio different filenames. Hash small
+    # source assets once in preparation so they share proven decoded data;
+    # persist that identity so future arming does not repeat the hash.
+    if not metadata.get('source_sha256') and source[1]<=64*1024*1024:
+        with open(path,'rb') as stream:
+            digest=hashlib.file_digest(stream,'sha256').hexdigest()
+        if fingerprint(path)!=source:
+            raise RuntimeError("Audio changed during preparation; try again.")
+        metadata=dict(metadata,source_sha256=digest)
+        if metadata.get('duration'):
+            disk_cache.store_metadata(source,metadata)
+    key=_pcm_key(source,metadata,cue.start_position,cue.end_position,rate)
     cached=disk_cache.load_pcm(key,DECODE_LIMIT)
     if cached is not None and fingerprint(path)==source:
         log.info("AUDIO PCM CACHE HIT file=%r bytes=%s",str(path),cached.nbytes)
@@ -91,7 +116,9 @@ def decode_audio(path, cue, rate):
     result, pcm = _run(path,"decode",start=cue.start_position or 0,
                        end=cue.end_position,rate=rate)
     if fingerprint(path)==source:
-        disk_cache.store_pcm(key,pcm)
+        metadata=dict(result,sample_rate=result.get('source_sample_rate',result['sample_rate']))
+        disk_cache.store_metadata(source,metadata)
+        disk_cache.store_pcm(_pcm_key(source,metadata,cue.start_position,cue.end_position,rate),pcm)
     return pcm, result["sample_rate"]
 
 
@@ -183,8 +210,11 @@ def _execute(path, mode, key, timeout, extra):
                 raise RuntimeError(f"Decoder failed (code {process.returncode}).")
             if fingerprint(path) != key:
                 raise RuntimeError("Audio changed during decoding; try again.")
+            if result.get("diagnostic_warning"):
+                log.warning("AUDIO LENGTH ADJUSTMENT mode=%s file=%r detail=%s",
+                            mode, str(path), result["diagnostic_warning"])
             output = None
-            if mode == "decode":
+            if mode in ("decode","validate"):
                 output = np.load(request["output"],allow_pickle=False)
                 if output.ndim != 2 or not len(output) or output.shape[1] not in (1,2) or output.nbytes > DECODE_LIMIT or not np.isfinite(output).all():
                     raise RuntimeError("Decoded audio failed safety checks.")

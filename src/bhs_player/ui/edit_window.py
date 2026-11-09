@@ -10,6 +10,7 @@ from .theme import ViewingModeControl
 from .audio_health import show_diagnostics
 
 from typing import Optional
+from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Slot, QThreadPool
 
 from PySide6.QtWidgets import (
@@ -158,7 +159,10 @@ class EditWindow(QMainWindow):
         tester_btn.clicked.connect(self._audio_test)
         readiness_btn = QPushButton("Show Readiness...")
         readiness_btn.clicked.connect(self._validate_show)
-        for btn in (profile_btn, tester_btn, readiness_btn):
+        recheck_btn = QPushButton("Recheck Audio")
+        recheck_btn.setToolTip("Force full validation of production audio, bypassing cached validation results.")
+        recheck_btn.clicked.connect(self._recheck_audio)
+        for btn in (profile_btn, tester_btn, readiness_btn, recheck_btn):
             profile_row.addWidget(btn)
         root.addLayout(profile_row)
         self.routing_notice = QLabel("")
@@ -556,6 +560,42 @@ class EditWindow(QMainWindow):
             fn(rehearsal=rehearsal)
         else:
             self.status_lbl.setText("Show Mode is launched by the main app.")
+
+    def _recheck_audio(self):
+        if getattr(self,'_recheck_job',None) is not None:
+            return
+        self._stop_audition()
+        from ..audio.safe_decode import inspect_audio
+        from .background import FileTask
+        paths=[]
+        for cue in self.cue_set.cues:
+            if cue.is_play_sound() and cue.audio_file:
+                path=Path(cue.audio_file)
+                if self.play_folder and not path.is_absolute():path=self.play_folder.folder/path
+                if path not in paths:paths.append(path)
+        def check():
+            issues=[]
+            for path in paths:
+                try:inspect_audio(path,full=True,force=True)
+                except Exception as exc:issues.append(f"{path.name}: {exc}")
+            return len(paths),issues
+        self._recheck_job=FileTask(check)
+        self._recheck_job.signals.done.connect(self._audio_rechecked)
+        self.status_lbl.setText("Rechecking all audio files - full validation...")
+        QThreadPool.globalInstance().start(self._recheck_job)
+
+    @Slot(object,str)
+    def _audio_rechecked(self,result,error):
+        self._recheck_job=None
+        if error:
+            self.status_lbl.setText("Audio recheck failed: "+error[:220])
+            return
+        total,issues=result
+        self.audio.clear_preparation()
+        import logging
+        for issue in issues:logging.getLogger('bhs_player.audio').error("MANUAL AUDIO RECHECK %s",issue)
+        self.status_lbl.setText(f"Audio recheck: {total-len(issues)}/{total} files passed."+
+                               (" "+issues[0][:180]+" See Diagnostics / Logs." if issues else ""))
 
     def _validate_show(self):
         """Explicit Validate Show control (Section 19)."""

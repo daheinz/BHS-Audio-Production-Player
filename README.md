@@ -146,3 +146,10 @@ Use Diagnostics / Logs for AUDIO SAFETY REJECT and AUDIO PREPARE FAILED details.
 
 
 Show/Rehearse cue columns now use compact widths, hide Audio File, and label the ID and output columns Cue and Bus. Full text remains available on hover and columns can be resized. Their width preferences are shared between Show and Rehearse but kept separately from Edit, whose columns remain unchanged.
+
+
+## Preparation performance and recent plays
+
+Validated metadata and decoded playback data now persist locally across launches. Import checks retain playback-ready data; unchanged and identical audio can reuse it after RAM eviction or reopening the app. The next cue preloads ahead, RAM entries use LRU access, and UI refresh avoids repeated file-identity reads. GO still waits for uncached preparation and all decoder safeguards remain enabled.
+
+Edit now includes **Recheck Audio** for an explicit full rescan. Open Play sorts by last successful open, independently of saving; canceled/failed opens do not affect order. The bounded 512 MiB disk cache is under LocalAppData/BHS Audio Production Player/audio-cache, outside the synced project folder. See [Performance and recent-play guide](Documentation/PLAYBACK-PERFORMANCE.md).

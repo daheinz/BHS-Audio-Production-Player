@@ -56,7 +56,7 @@ Readiness, device, board confirmation, and backup warnings remain visible at the
 
 ## Verification
 
-Run `python -m pytest -p no:cacheprovider` and `python tools/render_gui.py`. The current suite has 333 passing tests. Offline renders include `output/gui-review/playing-stack.png` (1500 by 920) and `playing-stack-small.png` (1000 by 700), plus Rehearse and unchanged Edit screens. These are silent/offscreen checks, not physical audibility or performance-reliability verification.
+Run `python -m pytest -p no:cacheprovider` and `python tools/render_gui.py`. The current suite has 347 passing tests. Offline renders include `output/gui-review/playing-stack.png` (1500 by 920) and `playing-stack-small.png` (1000 by 700), plus Rehearse and unchanged Edit screens. These are silent/offscreen checks, not physical audibility or performance-reliability verification.
 
 
 The **Next Cue Action** column (formerly Advance Mode) uses **Arm Next Now**, **Arm Next at End**, and **GO on End**. Stored values remain compatible. GO on End now visibly arms its successor during playback, then executes that armed cue at completion.
@@ -96,3 +96,10 @@ New imports are fully checked before copying or changing cue references. Native 
 
 
 Show/Rehearse cue columns now use compact widths, hide Audio File, and label the ID and output columns Cue and Bus. Full text remains available on hover and columns can be resized. Their width preferences are shared between Show and Rehearse but kept separately from Edit, whose columns remain unchanged.
+
+
+## Preparation/cache update
+
+The player now retains successful validation, metadata, and playback-ready PCM in a bounded local cache across launches. Import checks prepare reusable PCM; identical audio under different names can share it. One upcoming cue preloads ahead, RAM reuse is LRU, and repetitive UI file-identity polling is throttled. GO still checks current identity and retains all safety protections. Uncached legacy/changed clips or disk-evicted entries can still need initial decoding.
+
+Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordered by last successful open, not last save. Diagnostics logs record decoded-cache hits and preparation elapsed time. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md) for cache location/limits, first-use behavior, and measured offline timings.
