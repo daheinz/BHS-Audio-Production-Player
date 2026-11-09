@@ -138,12 +138,11 @@ def test_five_second_progress_and_meter_follow_signal():
     assert v_finished is not None
 
 
-def test_identifiers_stay_distinct_through_save_load():
-    cs = CueSet(play_name="Clue")
-    cs.insert(Cue(identifier="12.1"))
-    cs.insert(Cue(identifier="12.10"))
+def test_legacy_duplicate_identifier_text_preserved_for_repair():
+    cs = CueSet(play_name="Clue", cues=[Cue(identifier="12.1"), Cue(identifier="12.10")])
     loaded = deserialize_cue_set(serialize_cue_set(cs))
     assert [c.identifier for c in loaded.cues] == ["12.1", "12.10"]
+    assert loaded.identifiers_unique()
 
 
 def test_every_save_creates_new_version_and_history_survives(tmp_path):

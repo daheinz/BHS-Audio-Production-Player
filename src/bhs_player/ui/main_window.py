@@ -4,17 +4,18 @@ Spec references: Sections 9, 10, 11, 12, 13, 14.
 
 Show Mode: Playing Stack, prominent ARMED cue, large GO, permanent STOP ALL,
 cue list with selected/armed/playing/completed states, Back / ARM CUE,
-master level, output device status.
+bus levels, output device status.
 
 Spacebar == GO, with keyboard auto-repeat ignored and text-field focus
 protected (Section 14).
 """
 
 from __future__ import annotations
+from .theme import ViewingModeControl
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeyEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -23,6 +24,11 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
+    QTextEdit,
+    QPlainTextEdit,
+    QApplication,
+    QScrollArea,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -35,6 +41,8 @@ from ..cues.engine import CueEngine
 from ..cues.model import ActionType, Cue, CueExecutionState, CueSet
 from .device_dialog import DeviceDialog
 from .widgets import LevelMeter, ProgressBar, format_time
+from .cue_table import CueTable
+from .save_changes import SaveState
 
 REFRESH_MS = 40  # ~25 updates/sec (Section 9)
 
@@ -114,11 +122,16 @@ class PlayingStackEntry(QWidget):
 
 
 class MainWindow(QMainWindow):
+    returnedToEdit = Signal()
     def __init__(self, cue_set: CueSet, engine: CueEngine, audio: AudioEngine,
                  backend: StreamingAudioBackend | None = None, parent=None,
-                 version_name: str = "", play_folder=None):
+                 version_name: str = "", play_folder=None, save_state=None,
+                 confirm_close: bool = True, routing=None, rehearsal=False, preview=False):
         super().__init__(parent)
+        self.routing, self.rehearsal, self.preview = routing, rehearsal, preview
         self.cue_set = cue_set
+        self.save_state = save_state if save_state is not None else SaveState(cue_set)
+        self.confirm_close = confirm_close
         self.engine = engine
         self.audio = audio
         self.backend = backend
@@ -127,17 +140,35 @@ class MainWindow(QMainWindow):
         if version_name:
             title += f"  [{version_name}]"
         self.setWindowTitle(title)
-        self.resize(900, 700)
+        self.resize(1500, 850)
         self._space_held = False
         self._stack_entries: dict = {}  # id(instance) -> PlayingStackEntry
 
-        if self.backend is not None:
+        if self.backend is not None and routing is None:
             self.backend.on_output_lost = self._on_output_lost
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
+        mode = "REHEARSAL" if rehearsal else "SHOW MODE"
+        if preview:
+            mode += " / GUI PREVIEW - NO AUDIO"
+        heading = QHBoxLayout()
+        mode_label = QLabel(f"{cue_set.play_name}  /  {mode}")
+        mode_label.setWordWrap(True)
+        mode_label.setStyleSheet("font-size: 24px; font-weight: bold; padding: 6px")
+        heading.addWidget(mode_label, 1)
+        back_edit = QPushButton("Return to Edit — Stop Playback")
+        back_edit.clicked.connect(self.close)
+        heading.addWidget(ViewingModeControl(self))
+        heading.addWidget(back_edit)
+        root.addLayout(heading)
+        self.test_warning = QLabel("")
+        self.test_warning.setWordWrap(True)
+        self.test_warning.setProperty("tone", "warning")
+        self.test_warning.setStyleSheet("font-weight: bold")
+        root.addWidget(self.test_warning)
         # --- output status / AUDIO OUTPUT LOST banner (Section 15) ---
         self.output_banner = QLabel("")
         self.output_banner.setStyleSheet(
@@ -147,20 +178,30 @@ class MainWindow(QMainWindow):
 
         device_row = QHBoxLayout()
         self.device_lbl = QLabel("Output: (none)")
+        self.device_lbl.setWordWrap(True)
         device_row.addWidget(self.device_lbl, 1)
-        change_btn = QPushButton("Change Output…")
-        change_btn.clicked.connect(self._change_output)
-        device_row.addWidget(change_btn)
+        self.route_lbl = QLabel("PRIMARY")
+        self.route_lbl.setObjectName("routeStatus")
+        device_row.addWidget(self.route_lbl)
+        self.switch_btn = QPushButton("Switch to Backup...")
+        self.switch_btn.clicked.connect(self._switch_route)
+        device_row.addWidget(self.switch_btn)
         root.addLayout(device_row)
 
         # --- PLAYING stack ---
         root.addWidget(QLabel("PLAYING"))
         self.stack_area = QVBoxLayout()
-        root.addLayout(self.stack_area, 1)
+        stack_content = QWidget()
+        stack_content.setLayout(self.stack_area)
+        stack_scroll = QScrollArea()
+        stack_scroll.setWidgetResizable(True)
+        stack_scroll.setWidget(stack_content)
+        root.addWidget(stack_scroll, 1)
 
         # --- ARMED + GO ---
         armed_row = QHBoxLayout()
         self.armed_lbl = QLabel("ARMED: (none)")
+        self.armed_lbl.setWordWrap(True)
         self.armed_lbl.setStyleSheet(
             "font-size: 20px; font-weight: bold; padding: 8px;"
             "background: #1a3a1a; color: #cfe8cf;")
@@ -172,32 +213,35 @@ class MainWindow(QMainWindow):
         self.go_btn.clicked.connect(self._go)
         armed_row.addWidget(self.go_btn)
         root.addLayout(armed_row)
+        self.notes_lbl = QLabel("")
+        self.notes_lbl.setWordWrap(True)
+        root.addWidget(self.notes_lbl)
 
-        # --- master level + emergency stop ---
+        # --- emergency stop ---
         ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("Master"))
-        self.master_slider = QSlider(Qt.Horizontal)
-        self.master_slider.setRange(0, 100)
-        # per-play master level (Section 6A); slider drives the mixer and the
-        # value is saved with the cue set
-        self.master_slider.setValue(int(round(cue_set.master_level * 100)))
-        self.audio.mixer.set_master_level(cue_set.master_level)
-        self.master_slider.valueChanged.connect(self._master_changed)
-        ctrl.addWidget(self.master_slider, 1)
-        self.master_meter = LevelMeter()
-        ctrl.addWidget(self.master_meter, 1)
         stop_all = QPushButton("STOP ALL")
         stop_all.setStyleSheet(
             "font-weight: bold; padding: 10px 20px; background: #b71c1c; color: white;")
         stop_all.clicked.connect(self._stop_all)
         ctrl.addWidget(stop_all)
-        # Save is allowed in Show Mode: it creates a new history version
-        # without interrupting audio (Section 13 amendment).
-        save_btn = QPushButton("Save Version")
-        save_btn.clicked.connect(self._save_version)
-        ctrl.addWidget(save_btn)
         root.addLayout(ctrl)
 
+        self.bus_row = QHBoxLayout()
+        self.bus_displays = {}
+        for bus in cue_set.profile.buses:
+            box = QVBoxLayout()
+            label = QLabel(f"{bus.name} · {bus.shape} · {bus.level*100:g}% (locked)")
+            label.setWordWrap(True)
+            label.setStyleSheet("font-weight: bold")
+            meter = LevelMeter()
+            status = QLabel("Meter unavailable — output not prepared")
+            status.setStyleSheet("font-size: 11px")
+            box.addWidget(label)
+            box.addWidget(meter)
+            box.addWidget(status)
+            self.bus_row.addLayout(box)
+            self.bus_displays[bus.id] = (meter, status)
+        root.addLayout(self.bus_row)
         # --- navigation ---
         nav = QHBoxLayout()
         back_btn = QPushButton("◀ BACK")
@@ -206,13 +250,17 @@ class MainWindow(QMainWindow):
         arm_btn = QPushButton("ARM CUE")
         arm_btn.clicked.connect(self._arm_selected)
         nav.addWidget(arm_btn)
+        self.go_reason = QLabel("")
+        nav.addWidget(self.go_reason)
         self.status_lbl = QLabel("")
-        self.status_lbl.setStyleSheet("color: #d8a0a0;")
+        self.status_lbl.setProperty("tone", "error")
         nav.addWidget(self.status_lbl, 1)
         root.addLayout(nav)
 
         # --- cue list ---
-        self.cue_list = QListWidget()
+        root.addWidget(QLabel("Cue Table - blue outline: selected / green: armed / amber: playing / gray: completed or interrupted"))
+        self.cue_list = CueTable(cue_set)
+        self.cue_table = self.cue_list
         self.cue_list.currentRowChanged.connect(lambda _r: self._refresh_nav())
         root.addWidget(self.cue_list, 2)
         self._rebuild_cue_list()
@@ -251,6 +299,8 @@ class MainWindow(QMainWindow):
 
     # ---- actions --------------------------------------------------------
     def _go(self):
+        if self.preview:
+            return
         result = self.engine.go()
         if not result.ok:
             self.status_lbl.setText(result.reason)
@@ -260,23 +310,44 @@ class MainWindow(QMainWindow):
 
     def _stop_all(self):
         self.engine.stop_all()
-        self.status_lbl.setText("STOP ALL - nothing armed; select and ARM a cue")
+        self.status_lbl.setText("STOP ALL — playback stopped. Use ARM CUE if no cue is armed.")
         self._refresh()
 
     def _save_version(self):
         if self.play_folder is None:
             self.status_lbl.setText("No play folder; cannot save.")
-            return
+            return False
+        if not self.save_state.has_changes:
+            return True
         try:
             path = self.play_folder.save_version(self.cue_set)
+            self.save_state.mark_saved()
             self.status_lbl.setText(f"Saved: {path.name}")
+            return True
         except Exception as exc:
             self.status_lbl.setText(f"Save failed: {exc}")
+            return False
 
-    def _master_changed(self, value: int) -> None:
-        level = value / 100.0
-        self.audio.mixer.set_master_level(level)
-        self.cue_set.master_level = level
+    def closeEvent(self, event) -> None:
+        if self.confirm_close and self.save_state.has_changes and not self._save_version():
+            event.ignore()
+            return
+        self._timer.stop()
+        self.engine.interrupt_output(disarm=True)
+        if self.routing:
+            self.routing.backend.stop()
+            self.audio.set_ready(False)
+        self.returnedToEdit.emit()
+        super().closeEvent(event)
+
+    def _switch_route(self):
+        if self.routing is None or self.preview:
+            return
+        route = "backup" if self.routing.route == "primary" else "primary"
+        if QMessageBox.question(self, "Switch Output?", f"Stop current sounds and prepare {route}? Interrupted sounds will not restart. A separately armed cue stays armed.", QMessageBox.Yes | QMessageBox.Cancel) == QMessageBox.Yes:
+            self.routing.prepare(route)
+            self.status_lbl.setText(self.routing.message)
+            self._refresh()
 
     def _back(self):
         if not self.engine.back():
@@ -293,14 +364,7 @@ class MainWindow(QMainWindow):
 
     # ---- refresh ---------------------------------------------------------
     def _rebuild_cue_list(self):
-        from .edit_window import cue_row_tooltip, format_cue_row
-        self.cue_list.blockSignals(True)
-        self.cue_list.clear()
-        for cue in self.cue_set.cues:
-            item = QListWidgetItem(format_cue_row(cue, self.cue_set))
-            item.setToolTip(cue_row_tooltip(cue, self.cue_set))
-            self.cue_list.addItem(item)
-        self.cue_list.blockSignals(False)
+        self.cue_list.rebuild()
 
     def _sync_playing_stack(self):
         """Keep one persistent widget per active instance; create on arrival,
@@ -345,7 +409,7 @@ class MainWindow(QMainWindow):
                 if armed.action is ActionType.FADE:
                     detail += f" over {armed.fade_duration:.1f}s"
             self.armed_lbl.setText(
-                f"ARMED: {armed.identifier}  {armed.name}  [{armed.action.value}]{detail}")
+                f"ARMED: {armed.identifier}  {armed.name}  [{armed.action.value}]{detail}  ·  {self.cue_set.profile.bus_names(armed.bus_ids) if armed.is_play_sound() else 'Control cue'}")
         elif self.engine._waiting_on:
             waiting = self.cue_set.by_internal_id(self.engine._waiting_on)
             label = waiting.identifier if waiting else ""
@@ -355,7 +419,25 @@ class MainWindow(QMainWindow):
 
         # GO availability
         ok, reason = self.engine.go_available()
-        self.go_btn.setEnabled(ok)
+        self.go_btn.setEnabled(ok and not self.preview)
+        self.go_btn.setToolTip(reason if not ok else "Execute the armed cue (Spacebar)")
+        self.notes_lbl.setText(armed.notes if armed else "")
+        self.notes_lbl.setVisible(bool(armed and armed.notes))
+        self.switch_btn.setEnabled(False)
+        if self.routing:
+            self.route_lbl.setText(self.routing.route.upper() + (" READY" if self.audio.ready else " NOT READY"))
+            self.device_lbl.setText(self.routing.message)
+            route = "backup" if self.routing.route == "primary" else "primary"
+            reason_switch = self.routing.unsupported(route)
+            self.switch_btn.setText(f"Switch to {route.title()}…")
+            self.switch_btn.setEnabled(not reason_switch and not self.preview)
+            self.switch_btn.setToolTip(reason_switch or "Deliberate route switch; drops current sounds.")
+            missing = self.routing.unconfirmed()
+            warnings = ["Unconfirmed at board: " + ", ".join(missing)] if missing else []
+            if "backup" not in self.routing.confirmations:
+                warnings.append("Backup not confirmed")
+            self.test_warning.setText(" · ".join(warnings))
+        self.go_reason.setText("GUI preview: playback disabled" if self.preview else reason if not ok else "Ready for GO")
 
         # output device status (Section 15)
         if self.backend is not None:
@@ -372,16 +454,22 @@ class MainWindow(QMainWindow):
             self.output_banner.setText("Audio engine not ready - select an output")
             self.output_banner.setVisible(True)
 
-        # master meter (post-master signal)
-        m = self.audio.mixer.last_meter
-        self.master_meter.set_levels(m.left_db, m.right_db, m.clipped)
+        # Only the supported one-bus primary adapter exposes a real bus meter.
+        for bus in self.cue_set.profile.buses:
+            meter, status = self.bus_displays[bus.id]
+            available = self.audio.ready and len(self.cue_set.profile.buses) == 1 and (not self.routing or self.routing.route == "primary") and not self.preview
+            meter.setEnabled(available)
+            if available:
+                m = self.audio.mixer.last_meter
+                meter.set_levels(m.left_db, m.right_db, m.clipped)
+                status.setText(f"L {m.left_db:.1f} / R {m.right_db:.1f} dBFS")
+            else:
+                meter.set_levels(float('-inf'), float('-inf'), False)
+                status.setText("Bus meter unavailable" + (" on combined backup" if self.routing and self.routing.route == "backup" else " — output not prepared"))
 
-        # cue list row colors
-        for i, cue in enumerate(self.cue_set.cues):
-            item = self.cue_list.item(i)
-            if item:
-                item.setBackground(STATE_COLORS.get(
-                    cue.execution_state, QColor(30, 30, 30)))
+        active_ids = {inst.cue_internal_id for inst in self.audio.active_instances()}
+        next_cue = armed
+        self.cue_list.highlight(active_ids, next_cue.internal_id if next_cue else None)
 
     def _refresh_nav(self):
         pass  # selection highlight handled by Qt; arming is explicit
@@ -390,7 +478,7 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key_Space:
             # typing in a text field must not trigger GO
-            if isinstance(self.focusWidget(), QLineEdit):
+            if isinstance(self.focusWidget(), (QLineEdit, QTextEdit, QPlainTextEdit)) or QApplication.activeModalWidget() is not None:
                 super().keyPressEvent(event)
                 return
             # ignore auto-repeat: one physical press = one GO

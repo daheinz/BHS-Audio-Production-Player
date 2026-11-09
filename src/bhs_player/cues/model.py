@@ -18,6 +18,7 @@ import itertools
 import re
 import uuid
 from dataclasses import dataclass, field
+from ..profiles import ProductionProfile
 from enum import Enum
 from typing import Optional
 
@@ -60,6 +61,12 @@ def validate_identifier(identifier: str) -> bool:
     return bool(_IDENTIFIER_RE.match(identifier))
 
 
+def identifier_key(identifier: str):
+    """Cue identity is the exact entered text (DOC-002 v0.2)."""
+    return identifier
+
+
+
 _id_counter = itertools.count(1)
 
 
@@ -93,6 +100,8 @@ class Cue:
     target_internal_id: Optional[str] = None
     fade_duration: float = 0.0  # FADE action's own duration
 
+    bus_ids: list[str] = field(default_factory=lambda: ["main"])
+
     # Runtime execution state (not persisted in cue set file semantics,
     # but saved so restores are faithful)
     execution_state: CueExecutionState = CueExecutionState.IDLE
@@ -119,6 +128,9 @@ class CueSet:
     cues: list[Cue] = field(default_factory=list)
     master_level: float = 1.0  # remembered per play (Section 6A)
 
+    profile: "ProductionProfile" = field(default_factory=lambda: ProductionProfile())
+    migration_notes: list[str] = field(default_factory=list)
+
     def performance_order(self) -> list[Cue]:
         """The cue list in performance order (identity order of self.cues)."""
         return list(self.cues)
@@ -129,18 +141,22 @@ class CueSet:
                 return c
         return None
 
-    def by_identifier(self, identifier: str) -> Optional[Cue]:
+    def by_identifier(self, identifier: str, exclude: Optional[Cue] = None) -> Optional[Cue]:
+        key = identifier_key(identifier)
         for c in self.cues:
-            if c.identifier == identifier:
+            if c is not exclude and identifier_key(c.identifier) == key:
                 return c
         return None
 
     def identifiers_unique(self) -> bool:
-        ids = [c.identifier for c in self.cues]
+        ids = [identifier_key(c.identifier) for c in self.cues]
         return len(ids) == len(set(ids))
 
     def insert(self, cue: Cue, index: Optional[int] = None) -> None:
         """Insert at an explicit performance position; default appends."""
+        existing = self.by_identifier(cue.identifier)
+        if existing is not None:
+            raise ValueError(f"Cue ID '{cue.identifier}' is already in use as '{existing.identifier}'.")
         if index is None:
             self.cues.append(cue)
         else:

@@ -7,6 +7,8 @@ ENTER SHOW MODE; warnings remain visible.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from .theme import colors, viewing_mode
 from PySide6.QtWidgets import (
     QDialog,
     QLabel,
@@ -29,7 +31,7 @@ class PreShowDialog(QDialog):
         self.setWindowTitle("Pre-Show Status")
         self.setModal(True)
         self.resize(560, 480)
-
+        viewing_mode()
         root = QVBoxLayout(self)
 
         title = QLabel(status.play_name.upper())
@@ -44,17 +46,17 @@ class PreShowDialog(QDialog):
             i.severity is Severity.CRITICAL and ("target" in i.message or "identifier" in i.message.lower())
             for i in status.report.issues)
         refs_lbl = QLabel("All cue references valid" if refs_ok else "Cue reference problems found")
-        refs_lbl.setStyleSheet(f"color: {'#7fc97f' if refs_ok else '#e07070'};")
+        refs_lbl.setProperty("tone", "success" if refs_ok else "error")
         root.addWidget(refs_lbl)
 
         dev_lbl = QLabel(
             f"{status.device_name} connected" if status.device_connected
             else "No audio output device connected")
-        dev_lbl.setStyleSheet(f"color: {'#7fc97f' if status.device_connected else '#e07070'};")
+        dev_lbl.setProperty("tone", "success" if status.device_connected else "error")
         root.addWidget(dev_lbl)
 
         eng_lbl = QLabel("Audio engine ready" if status.engine_ready else "Audio engine NOT ready")
-        eng_lbl.setStyleSheet(f"color: {'#7fc97f' if status.engine_ready else '#e07070'};")
+        eng_lbl.setProperty("tone", "success" if status.engine_ready else "error")
         root.addWidget(eng_lbl)
 
         root.addWidget(QLabel(f"Recovery state: {status.recovery_state}"))
@@ -69,16 +71,15 @@ class PreShowDialog(QDialog):
                 text += f"  — {issue.fix}"
             item = QListWidgetItem(text)
             item.setForeground(
-                Qt.red if issue.severity is Severity.CRITICAL else Qt.yellow)
+                QColor(colors()['error']) if issue.severity is Severity.CRITICAL else QColor(colors()['warning']))
             self.issues.addItem(item)
         if not status.report.issues:
             self.issues.addItem(QListWidgetItem("No issues."))
         root.addWidget(self.issues, 1)
 
         ready_lbl = QLabel("SHOW READY" if status.show_ready else "NOT READY - resolve critical issues")
-        ready_lbl.setStyleSheet(
-            f"font-size: 18px; font-weight: bold; padding: 8px;"
-            f"color: {'#7fc97f' if status.show_ready else '#e07070'};")
+        ready_lbl.setProperty("tone", "success" if status.show_ready else "error")
+        ready_lbl.setStyleSheet("font-size: 18px; font-weight: bold; padding: 8px;")
         ready_lbl.setAlignment(Qt.AlignCenter)
         root.addWidget(ready_lbl)
 

@@ -5,6 +5,7 @@ offers to restore a recovery copy if one is newer than the last save.
 """
 
 from __future__ import annotations
+from .theme import ViewingModeControl
 
 from pathlib import Path
 from typing import Optional
@@ -36,6 +37,7 @@ class OpenPlayDialog(QDialog):
         self.setModal(True)
         self.resize(640, 380)
 
+        self.created_new = False
         self.result_cue_set: Optional[CueSet] = None
         self.result_play_folder: Optional[PlayFolder] = None
         self.result_version_name: str = ""
@@ -44,6 +46,7 @@ class OpenPlayDialog(QDialog):
 
         # left: play library
         left = QVBoxLayout()
+        left.addWidget(ViewingModeControl(self))
         left.addWidget(QLabel("Plays"))
         self.plays_list = QListWidget()
         self.plays_list.currentRowChanged.connect(self._on_play_changed)
@@ -59,7 +62,7 @@ class OpenPlayDialog(QDialog):
         self.versions_list = QListWidget()
         right.addWidget(self.versions_list, 1)
         self.recovery_lbl = QLabel("")
-        self.recovery_lbl.setStyleSheet("color: #e0b050;")
+        self.recovery_lbl.setProperty("tone", "warning")
         right.addWidget(self.recovery_lbl)
         buttons = QDialogButtonBox(QDialogButtonBox.Open | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._open)
@@ -104,8 +107,27 @@ class OpenPlayDialog(QDialog):
         name, ok = QInputDialog.getText(self, "New Play", "Play name:")
         if ok and name.strip():
             from ..storage.plays import create_play
-            create_play(self.plays_root, name.strip())
-            self._reload()
+            from ..cues.model import CueSet
+            from .profile_dialog import ProfileDialog
+            cs = CueSet(name.strip())
+            profile = ProfileDialog(cs, self, creation=True)
+            if not profile.exec():
+                return
+            cs.profile = profile.profile
+            pf = PlayFolder(self.plays_root, name.strip())
+            if pf.folder.exists():
+                QMessageBox.warning(self, "Production Exists", "Choose a different production name.")
+                return
+            try:
+                pf.save_version(cs)
+            except OSError as exc:
+                QMessageBox.critical(self, "Create Failed", str(exc))
+                return
+            self.result_cue_set = cs
+            self.result_play_folder = pf
+            self.result_version_name = pf.latest_version().name
+            self.created_new = True
+            self.accept()
 
     def _open(self):
         play = self._current_play()

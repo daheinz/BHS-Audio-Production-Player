@@ -1,0 +1,6 @@
+# Keep source and documentation consistent on every platform.
+* text=auto eol=lf
+
+# Windows command launchers use native line endings.
+*.cmd text eol=crlf
+*.bat text eol=crlf

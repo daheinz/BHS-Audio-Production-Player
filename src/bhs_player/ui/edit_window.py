@@ -6,6 +6,7 @@ playback is isolated from show advancement and labeled TEST.
 """
 
 from __future__ import annotations
+from .theme import ViewingModeControl
 
 from typing import Optional
 
@@ -24,7 +25,8 @@ from PySide6.QtWidgets import (
 from ..audio.engine import AudioEngine
 from ..cues.model import ActionType, AdvanceMode, Cue, CueSet, OnGoBehavior
 from ..storage.store import PlayFolder
-from .cue_editor_dialog import CueEditorDialog
+from .cue_table import CueTable
+from .save_changes import SaveState
 
 
 # ---- cue row display + tooltips (Sections 5, 11) --------------------------
@@ -81,7 +83,7 @@ def cue_row_tooltip(cue: Cue, cue_set: CueSet) -> str:
     add("Action", cue.action.value, "what GO executes for this cue")
     if cue.action is ActionType.PLAY:
         add("Volume", f"{cue.volume * 100:.0f}%",
-            "playback level relative to the Master Output Level")
+            "playback level before the assigned bus output level")
         add("Fade-In", f"{cue.fade_in:g}s",
             "time to ramp from silence to full volume at start (0 = instant)")
         add("Fade-Out", f"{cue.fade_out:g}s",
@@ -118,14 +120,16 @@ class EditWindow(QMainWindow):
 
     def __init__(self, cue_set: CueSet, audio: AudioEngine,
                  play_folder: Optional[PlayFolder] = None,
-                 on_save=None, parent=None):
+                 on_save=None, parent=None, routing=None):
         super().__init__(parent)
+        self.routing = routing
         self.cue_set = cue_set
+        self.save_state = SaveState(cue_set)
         self.audio = audio
         self.play_folder = play_folder
         self.on_save = on_save
         self.setWindowTitle(f"Edit - {cue_set.play_name}")
-        self.resize(760, 620)
+        self.resize(1500, 720)
         self._test_instance = None
         self._test_cue_id: Optional[str] = None
 
@@ -133,9 +137,32 @@ class EditWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        root.addWidget(QLabel(f"Cue List — {cue_set.play_name}"))
+        heading = QLabel(f"{cue_set.play_name}  /  EDIT")
+        heading.setStyleSheet("font-size: 25px; font-weight: bold; padding: 8px 0")
+        root.addWidget(heading)
+        root.addWidget(ViewingModeControl(self))
+        profile_row = QHBoxLayout()
+        self.profile_label = QLabel("")
+        self.profile_label.setWordWrap(True)
+        profile_row.addWidget(self.profile_label, 1)
+        profile_btn = QPushButton("Profile and Routing...")
+        profile_btn.clicked.connect(self._profile)
+        tester_btn = QPushButton("Pre-Audience Audio Test...")
+        tester_btn.clicked.connect(self._audio_test)
+        readiness_btn = QPushButton("Show Readiness...")
+        readiness_btn.clicked.connect(self._validate_show)
+        for btn in (profile_btn, tester_btn, readiness_btn):
+            profile_row.addWidget(btn)
+        root.addLayout(profile_row)
+        self.routing_notice = QLabel("")
+        self.routing_notice.setWordWrap(True)
+        root.addWidget(self.routing_notice)
+        self._refresh_profile()
 
-        self.list = QListWidget()
+        self.list = CueTable(cue_set, editable=True, play_folder=play_folder)
+        self.cue_table = self.list
+        self.list.cueChanged.connect(self._mark_edited)
+        self.list.editRejected.connect(lambda message: self.status_lbl.setText(message))
         self.list.currentRowChanged.connect(lambda _r: self._update_buttons())
         root.addWidget(self.list, 1)
 
@@ -143,7 +170,7 @@ class EditWindow(QMainWindow):
         row1 = QHBoxLayout()
         add_btn = QPushButton("Add Cue")
         add_btn.clicked.connect(self._add_cue)
-        edit_btn = QPushButton("Edit Cue")
+        edit_btn = QPushButton("Edit Selected Cell")
         edit_btn.clicked.connect(self._edit_cue)
         del_btn = QPushButton("Remove Cue")
         del_btn.clicked.connect(self._remove_cue)
@@ -156,6 +183,12 @@ class EditWindow(QMainWindow):
         validate_btn = QPushButton("Validate Show")
         validate_btn.clicked.connect(self._validate_show)
         row1.addWidget(validate_btn)
+        import_btn = QPushButton("Browse / Import Audio")
+        import_btn.clicked.connect(self._browse_audio)
+        row1.addWidget(import_btn)
+        advanced = QPushButton("Advanced Cue Editor…")
+        advanced.clicked.connect(self._advanced)
+        row1.addWidget(advanced)
         root.addLayout(row1)
         self.edit_btn, self.del_btn, self.up_btn, self.down_btn = edit_btn, del_btn, up_btn, down_btn
 
@@ -166,7 +199,8 @@ class EditWindow(QMainWindow):
         self.stop_test_btn = QPushButton("Stop TEST")
         self.stop_test_btn.clicked.connect(self._stop_audition)
         self.test_lbl = QLabel("")
-        self.test_lbl.setStyleSheet("color: #d0a040; font-weight: bold;")
+        self.test_lbl.setProperty("tone", "warning")
+        self.test_lbl.setStyleSheet("font-weight: bold")
         for w in (self.test_btn, self.stop_test_btn, self.test_lbl):
             row2.addWidget(w)
         row2.addStretch(1)
@@ -183,23 +217,10 @@ class EditWindow(QMainWindow):
         test_row.addWidget(self.test_meter, 1)
         root.addLayout(test_row)
 
-        # master level (Section 6A) — Edit Mode control, persisted per play
-        from PySide6.QtWidgets import QSlider
-        from PySide6.QtCore import Qt
-        master_row = QHBoxLayout()
-        master_row.addWidget(QLabel("Master"))
-        self.master_slider = QSlider(Qt.Horizontal)
-        self.master_slider.setRange(0, 100)
-        self.master_slider.setValue(int(round(cue_set.master_level * 100)))
-        self.audio.mixer.set_master_level(cue_set.master_level)
-        self.master_slider.valueChanged.connect(self._master_changed)
-        master_row.addWidget(self.master_slider, 1)
-        root.addLayout(master_row)
-
         # save + enter show
         row3 = QHBoxLayout()
         self.status_lbl = QLabel("")
-        self.status_lbl.setStyleSheet("color: #8fc98f;")
+        self.status_lbl.setProperty("tone", "success")
         row3.addWidget(self.status_lbl, 1)
         save_btn = QPushButton("Save Version")
         save_btn.setStyleSheet("font-weight: bold; padding: 8px 20px;")
@@ -209,6 +230,9 @@ class EditWindow(QMainWindow):
         show_btn.setStyleSheet(
             "font-weight: bold; padding: 10px 24px; background: #2e7d32; color: white;")
         show_btn.clicked.connect(self._enter_show)
+        rehearse_btn = QPushButton("REHEARSE")
+        rehearse_btn.clicked.connect(lambda: self._enter_show(True))
+        row3.addWidget(rehearse_btn)
         row3.addWidget(show_btn)
         root.addLayout(row3)
 
@@ -220,12 +244,52 @@ class EditWindow(QMainWindow):
 
         self._rebuild()
         self._update_buttons()
+        if play_folder is not None and play_folder.latest_version() is None:
+            self.save_state.force_unsaved = True
 
-    def _master_changed(self, value: int) -> None:
-        level = value / 100.0
-        self.audio.mixer.set_master_level(level)
-        self.cue_set.master_level = level
-        self._mark_edited()
+    def _refresh_profile(self):
+        p = self.cue_set.profile
+        self.profile_label.setText(f"Profile: {p.name}  ·  " + " / ".join(f"{b.name} ({b.shape}, {b.level*100:g}%)" for b in p.buses))
+        notes = list(self.cue_set.migration_notes)
+        if self.routing:
+            notes.append(self.routing.unsupported() or "Stereo playback connected. Run the Pre-Audience Audio Test before Show.")
+        else:
+            notes.append("Output integration unavailable in this window.")
+        self.routing_notice.setText("\n".join(notes))
+
+    def _profile(self):
+        from .profile_dialog import ProfileDialog
+        from dataclasses import asdict
+        dlg = ProfileDialog(self.cue_set, self)
+        if dlg.exec() and asdict(dlg.profile) != asdict(self.cue_set.profile):
+            self._stop_audition()
+            self.cue_set.profile = dlg.profile
+            if self.routing:
+                self.routing.invalidate()
+            self._mark_edited()
+            self._rebuild()
+        self._refresh_profile()
+
+    def _audio_test(self):
+        if not self.routing:
+            self.status_lbl.setText("Output integration unavailable.")
+            return
+        self._stop_audition()
+        from .audio_test_dialog import AudioTestDialog
+        AudioTestDialog(self.routing, self).exec()
+        self._refresh_profile()
+
+    def _advanced(self):
+        cue = self._selected_cue()
+        if cue is None:
+            self.status_lbl.setText("Select a cue first.")
+            return
+        from .cue_editor_dialog import CueEditorDialog
+        from dataclasses import asdict
+        before = asdict(cue)
+        if CueEditorDialog(cue, self.cue_set, self.play_folder, self).exec() and asdict(cue) != before:
+            self._mark_edited()
+            self._rebuild()
 
     def _refresh_test(self) -> None:
         """Drive TEST progress/meter from the actual audition voice."""
@@ -243,13 +307,7 @@ class EditWindow(QMainWindow):
 
     # ---- list -------------------------------------------------------------
     def _rebuild(self):
-        self.list.blockSignals(True)
-        self.list.clear()
-        for cue in self.cue_set.cues:
-            item = QListWidgetItem(format_cue_row(cue, self.cue_set))
-            item.setToolTip(cue_row_tooltip(cue, self.cue_set))
-            self.list.addItem(item)
-        self.list.blockSignals(False)
+        self.list.rebuild()
 
     def _selected_index(self) -> int:
         return self.list.currentRow()
@@ -264,36 +322,52 @@ class EditWindow(QMainWindow):
             b.setEnabled(has)
 
     # ---- cue operations ----------------------------------------------------
+    def _browse_audio(self):
+        cue = self._selected_cue()
+        if cue is None or not cue.is_play_sound():
+            self.status_lbl.setText("Select a PLAY cue to assign audio.")
+            return
+        self.list.browse_audio(self._selected_index())
+
     def _add_cue(self):
         cue = Cue(identifier=self._next_identifier())
-        dlg = CueEditorDialog(cue, self.cue_set, self.play_folder, self)
-        if dlg.exec():
-            # insert after current selection, else append (explicit placement)
-            idx = self._selected_index()
-            self.cue_set.insert(cue, index=(idx + 1) if idx >= 0 else None)
-            self._rebuild()
-            self._mark_edited()
+        while self.cue_set.by_identifier(cue.identifier):
+            page, sub = cue.identifier.split('.')
+            cue.identifier = f'{page}.{int(sub) + 1}'
+        idx = self._selected_index()
+        position = idx + 1 if idx >= 0 else len(self.cue_set.cues)
+        self.cue_set.insert(cue, index=position)
+        self._rebuild()
+        self.list.setCurrentCell(position, 1)
+        self.list.editItem(self.list.item(position, 1))
+        self._mark_edited()
 
     def _edit_cue(self):
         cue = self._selected_cue()
         if cue is None:
             return
-        dlg = CueEditorDialog(cue, self.cue_set, self.play_folder, self)
-        if dlg.exec():
-            self._rebuild()
-            self._mark_edited()
+        self.list.editItem(self.list.currentItem())
 
     def _remove_cue(self):
         cue = self._selected_cue()
         if cue is None:
             return
-        # warn if this cue is targeted by a STOP/FADE cue (Section 12)
+        # Referenced targets cannot be removed until links are reconciled.
         dependents = [c for c in self.cue_set.cues
                       if c.target_internal_id == cue.internal_id]
-        msg = f"Remove cue {cue.identifier}?"
         if dependents:
-            names = ", ".join(c.identifier for c in dependents)
-            msg += f"\n\nIt is the target of: {names}. Those cues will need retargeting."
+            box = QMessageBox(self)
+            box.setWindowTitle("Cue Is Linked")
+            box.setText(f"Cannot remove {cue.identifier}. Linked cues: " + ", ".join(c.identifier for c in dependents))
+            review = box.addButton("Review Linked Cues", QMessageBox.ActionRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec()
+            if box.clickedButton() is review:
+                from .linked_cues_dialog import LinkedCuesDialog
+                LinkedCuesDialog(self.cue_set, cue, self._mark_edited, self).exec()
+                self._rebuild()
+            return
+        msg = f"Remove cue {cue.identifier}?"
         if QMessageBox.question(self, "Remove Cue", msg) == QMessageBox.Yes:
             self.cue_set.remove(cue.internal_id)
             self._rebuild()
@@ -331,6 +405,9 @@ class EditWindow(QMainWindow):
         if not cue.audio_file:
             self.status_lbl.setText("Cue has no audio file.")
             return
+        if self.routing is None or not self.routing.prepare("primary"):
+            self.status_lbl.setText(self.routing.message if self.routing else "Configure an output in Profile & Routing first.")
+            return
         self._stop_audition()
         try:
             # isolated audition: does NOT touch show state or armed cue
@@ -358,16 +435,24 @@ class EditWindow(QMainWindow):
 
     # ---- save --------------------------------------------------------------
     def _save(self):
+        # Finish any open inline editor before capturing the saved version.
+        self.list.setFocus()
         if self.play_folder is None:
             self.status_lbl.setText("No play folder; cannot save.")
-            return
+            return False
+        if not self.save_state.has_changes:
+            self.status_lbl.setText("No changes to save.")
+            return True
         try:
             path = self.play_folder.save_version(self.cue_set)
+            self.save_state.mark_saved()
             self.status_lbl.setText(f"Saved: {path.name}")
             if self.on_save:
                 self.on_save(self.cue_set)
+            return True
         except Exception as exc:
             self.status_lbl.setText(f"Save failed: {exc}")
+            return False
 
     def _mark_edited(self):
         # recovery autosave (Section 18) - separate from permanent history;
@@ -382,14 +467,23 @@ class EditWindow(QMainWindow):
             self.status_lbl.setText("Unsaved changes")
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self.list.setFocus()
+        if self.save_state.has_changes and not self._save():
+            QMessageBox.warning(self, "Save Required Before Exit", self.status_lbl.text())
+            event.ignore()
+            return
+        self._timer.stop()
         self._stop_audition()
+        if self.routing:
+            self.routing.audio.stop_all()
+            self.routing.backend.stop()
         super().closeEvent(event)
 
-    def _enter_show(self):
+    def _enter_show(self, rehearsal=False):
         """app.main assigns enter_show(); guard if run standalone."""
         fn = getattr(self, "enter_show", None)
         if callable(fn):
-            fn()
+            fn(rehearsal=rehearsal)
         else:
             self.status_lbl.setText("Show Mode is launched by the main app.")
 
@@ -401,13 +495,41 @@ class EditWindow(QMainWindow):
             play_folder=self.play_folder.folder if self.play_folder else None,
             output_device_available=self.audio.ready,
         )
-        if report.show_ready and not report.warnings:
-            self.status_lbl.setText(
-                f"Validate Show: OK ({report.verified_audio_files} audio files verified)")
-            return
-        lines = []
-        for issue in report.critical:
-            lines.append(f"CRITICAL [{issue.cue_identifier or '-'}] {issue.message}")
-        for issue in report.warnings:
-            lines.append(f"warning [{issue.cue_identifier or '-'}] {issue.message}")
-        QMessageBox.warning(self, "Validate Show", "\n".join(lines))
+        if self.routing:
+            from ..validate.check import Severity
+            reason = self.routing.unsupported()
+            if reason:
+                report.add(Severity.CRITICAL, None, reason)
+            for name in self.routing.unconfirmed():
+                report.add(Severity.WARNING, None, f"Audio not confirmed at board: {name}")
+        profile = self.cue_set.profile
+        version = self.play_folder.latest_version().name if self.play_folder and self.play_folder.latest_version() else "Not saved"
+        summary = [f"Production: {self.cue_set.play_name}", f"Latest saved version: {version}",
+                   f"Cues: {len(self.cue_set.cues)} | Verified audio: {report.verified_audio_files}",
+                   f"Profile: {profile.name} | Buses: {len(profile.buses)}",
+                   f"Primary device: {profile.primary_device or 'Not selected'}",
+                   f"Backup device: {profile.backup_device or 'Not configured'}",
+                   f"Changes: {'Unsaved / recovery' if self.save_state.has_changes else 'Saved'}"]
+        if self.routing:
+            summary.append(self.routing.message)
+            summary.append("Backup audibility: " + ("Confirmed" if "backup" in self.routing.confirmations else "Not confirmed"))
+        lines = [f"BLOCKER [{issue.cue_identifier or 'Production'}] {issue.message}" for issue in report.critical]
+        lines += [f"Warning [{issue.cue_identifier or 'Production'}] {issue.message}" for issue in report.warnings]
+        box = QMessageBox(self)
+        box.setWindowTitle("Show Readiness")
+        box.setText("\n".join(summary) + "\n\n" + ("\n".join(lines) or "Validation passed. Physical audibility and performance reliability still require testing."))
+        profile_btn = box.addButton("Profile and Routing", QMessageBox.ActionRole)
+        test_btn = box.addButton("Run Audio Test", QMessageBox.ActionRole)
+        review_btn = box.addButton("Review Cues", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is profile_btn:
+            self._profile()
+        elif box.clickedButton() is test_btn:
+            self._audio_test()
+        elif box.clickedButton() is review_btn:
+            issue = next((i for i in report.critical if i.cue_identifier), None)
+            cue = self.cue_set.by_identifier(issue.cue_identifier) if issue else None
+            if cue:
+                self.list.setCurrentRow(self.cue_set.index_of(cue.internal_id))
+            self.list.setFocus()

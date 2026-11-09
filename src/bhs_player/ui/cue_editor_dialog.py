@@ -7,6 +7,7 @@ PLAY cue. Audio file can be chosen from the play folder or imported.
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace, fields
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -21,6 +22,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QVBoxLayout,
+    QScrollArea,
+    QWidget,
 )
 
 from ..cues.model import (
@@ -43,12 +46,13 @@ class CueEditorDialog(QDialog):
         self.cue = cue
         self.cue_set = cue_set
         self.play_folder = play_folder
-        self.setWindowTitle(f"Edit Cue {cue.identifier or '(new)'}")
+        self.setWindowTitle(f"Advanced Cue Editor — {cue.identifier or '(new)'}")
         self.setModal(True)
-        self.resize(520, 560)
+        self.resize(680, 740)
 
         root = QVBoxLayout(self)
         form = QFormLayout()
+        form.addRow(QLabel("GENERAL"))
 
         self.ident_edit = QLineEdit(cue.identifier)
         self.ident_edit.setToolTip(
@@ -76,6 +80,7 @@ class CueEditorDialog(QDialog):
                                    "(e.g. 'after the second gunshot').")
         form.addRow("Notes", self.notes_edit)
 
+        form.addRow(QLabel("PLAYBACK - used by PLAY cues"))
         # --- audio file (PLAY cues) ---
         self.file_row = QLineEdit(cue.audio_file or "")
         self.file_row.setPlaceholderText("audio/...  (relative to play folder)")
@@ -99,7 +104,7 @@ class CueEditorDialog(QDialog):
         self.volume_spin.setSuffix(" %")
         self.volume_spin.setValue(cue.volume * 100.0)
         self.volume_spin.setToolTip(
-            "Playback level as a percentage, relative to the Master Output "
+            "Playback level as a percentage, before its assigned Bus Output "
             "Level. 100% = unity gain, 50% = half, 200% = double (may clip).")
         form.addRow("Volume", self.volume_spin)
 
@@ -170,6 +175,7 @@ class CueEditorDialog(QDialog):
             "Leave at '(end of file)' to play to the end.")
         form.addRow("End Position", self.end_spin)
 
+        form.addRow(QLabel("ACTION TARGET - used by STOP / FADE"))
         # --- STOP / FADE target ---
         self.target_combo = QComboBox()
         self.target_combo.addItem("(none)", None)
@@ -196,10 +202,24 @@ class CueEditorDialog(QDialog):
         self.fade_dur_label = QLabel("Fade Duration")
         form.addRow(self.fade_dur_label, self.fade_dur_spin)
 
-        root.addLayout(form)
+        form.addRow(QLabel("OUTPUT ROUTING"))
+        self.bus_checks = []
+        buses = QVBoxLayout()
+        for bus in cue_set.profile.buses:
+            check = QCheckBox(f"{bus.name} ({bus.shape})")
+            check.setChecked(bus.id in cue.bus_ids)
+            self.bus_checks.append((bus.id, check))
+            buses.addWidget(check)
+        form.addRow("Output buses (one or more)", buses)
+        content = QWidget()
+        content.setLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        root.addWidget(scroll)
 
         self.error_lbl = QLabel("")
-        self.error_lbl.setStyleSheet("color: #e07070;")
+        self.error_lbl.setProperty("tone", "error")
         root.addWidget(self.error_lbl)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -220,6 +240,8 @@ class CueEditorDialog(QDialog):
                   self.behavior_combo, self.start_spin, self.end_spin):
             w.setEnabled(is_play)
         self.file_label.setEnabled(is_play)
+        for _, check in self.bus_checks:
+            check.setEnabled(is_play)
 
         self.target_combo.setEnabled(is_stopfade)
         self.target_label.setEnabled(is_stopfade)
@@ -248,13 +270,13 @@ class CueEditorDialog(QDialog):
             self.error_lbl.setText(
                 "Identifier must follow the script-page convention (e.g. 12.0, 47.21).")
             return
-        existing = self.cue_set.by_identifier(identifier)
-        if existing is not None and existing is not self.cue:
-            self.error_lbl.setText(f"Identifier '{identifier}' is already in use.")
+        existing = self.cue_set.by_identifier(identifier, exclude=self.cue)
+        if existing is not None:
+            self.error_lbl.setText(f"Identifier '{identifier}' is already in use as '{existing.identifier}'.")
             return
 
         action = self.action_combo.currentData()
-        cue = self.cue
+        cue = replace(self.cue)
         cue.identifier = identifier
         cue.name = self.name_edit.text().strip()
         cue.action = action
@@ -292,4 +314,11 @@ class CueEditorDialog(QDialog):
                 self.error_lbl.setText("Choose a target PLAY cue.")
                 return
 
+        if action is ActionType.PLAY:
+            cue.bus_ids = [id for id, check in self.bus_checks if check.isChecked()]
+            if not cue.bus_ids:
+                self.error_lbl.setText("Choose at least one output bus.")
+                return
+        for f in fields(cue):
+            setattr(self.cue, f.name, getattr(cue, f.name))
         self.accept()

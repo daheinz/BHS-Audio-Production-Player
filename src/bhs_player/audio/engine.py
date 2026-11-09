@@ -278,6 +278,22 @@ def resample_linear(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray
     return out.astype(np.float32)
 
 
+def audio_file_duration(path: str) -> float:
+    """Read the full sound length without applying a cue's segment settings."""
+    try:
+        info = sf.info(path)
+        return info.frames / info.samplerate
+    except Exception:
+        import av
+        with av.open(path) as container:
+            stream = next(s for s in container.streams if s.type == 'audio')
+            if stream.duration is not None and stream.time_base is not None:
+                return float(stream.duration * stream.time_base)
+            # Files without stream duration require counting decoded samples.
+            return sum(frame.samples / frame.sample_rate
+                       for frame in container.decode(stream))
+
+
 def load_segment_mono_or_stereo(path: str, cue: Cue) -> tuple[np.ndarray, int]:
     """Decode the cue's configured segment to float32 PCM. Returns
     (pcm, sample_rate). Raises on missing/unreadable files or bad segments.

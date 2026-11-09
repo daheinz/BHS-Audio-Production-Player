@@ -40,11 +40,11 @@ def test_roundtrip_preserves_everything(tmp_path):
 
 def test_identifier_text_survives_save_load(tmp_path):
     cs = CueSet(play_name="Clue")
-    cs.insert(Cue(identifier="12.1"))
+    cs.insert(Cue(identifier="12.11"))
     cs.insert(Cue(identifier="12.10"))
     loaded = deserialize_cue_set(serialize_cue_set(cs))
     ids = [c.identifier for c in loaded.cues]
-    assert ids == ["12.1", "12.10"]  # distinct, exact
+    assert ids == ["12.11", "12.10"]  # distinct decimal values; exact text
 
 
 def test_save_never_overwrites_creates_history(tmp_path):

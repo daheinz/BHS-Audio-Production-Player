@@ -70,7 +70,9 @@ def _cue_from_dict(d: dict) -> Cue:
 def serialize_cue_set(cue_set: CueSet) -> str:
     payload = {
         "play_name": cue_set.play_name,
-        "format_version": 1,
+        "format_version": 2,
+        "profile": asdict(cue_set.profile),
+        "migration_notes": cue_set.migration_notes,
         "master_level": cue_set.master_level,
         "cues": [_cue_to_dict(c) for c in cue_set.performance_order()],
     }
@@ -79,10 +81,20 @@ def serialize_cue_set(cue_set: CueSet) -> str:
 
 def deserialize_cue_set(text: str) -> CueSet:
     payload = json.loads(text)
+    from ..profiles import profile_from_dict, ProductionProfile
+    legacy = "profile" not in payload
+    profile = profile_from_dict(payload["profile"]) if not legacy else ProductionProfile()
+    notes = list(payload.get("migration_notes", []))
+    if legacy:
+        profile.buses[0].level = payload.get("master_level", 1.0)
+        notes.append("Legacy master preserved as Main bus level. Primary device is unresolved; review Profile & Routing before playback.")
     cs = CueSet(play_name=payload["play_name"],
-                master_level=payload.get("master_level", 1.0))
+                master_level=payload.get("master_level", 1.0), profile=profile,
+                migration_notes=notes)
     for cd in payload["cues"]:
-        cs.insert(_cue_from_dict(cd))
+        # Preserve invalid legacy lists so they can be opened and repaired;
+        # Validate Show blocks duplicates, including decimal equivalents.
+        cs.cues.append(_cue_from_dict(cd))
     return cs
 
 

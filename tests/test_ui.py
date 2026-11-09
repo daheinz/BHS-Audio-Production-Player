@@ -89,7 +89,7 @@ def test_stop_all_leaves_nothing_armed(qapp):
     win._stop_all()
     assert audio.active_instances() == []
     assert engine.armed_cue is None
-    assert "nothing armed" in win.status_lbl.text()
+    assert "ARM CUE" in win.status_lbl.text()
 
 
 def test_playing_stack_shows_active_sound(qapp):
@@ -101,10 +101,10 @@ def test_playing_stack_shows_active_sound(qapp):
     assert win.stack_area.count() == 1  # one entry for the active sound
 
 
-def test_master_slider_scales_output(qapp):
+def test_show_has_locked_bus_displays_and_no_master(qapp):
     win, engine, audio, cs = make_window(qapp, [play("1.0")])
-    win.master_slider.setValue(50)
-    assert audio.mixer.master_level == 0.5
+    assert not hasattr(win, 'master_slider')
+    assert set(win.bus_displays) == {'main'}
 
 
 def test_back_moves_armed_to_previous(qapp):

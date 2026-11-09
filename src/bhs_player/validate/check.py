@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from ..cues.model import ActionType, CueSet, validate_identifier
+from ..cues.model import ActionType, CueSet, identifier_key, validate_identifier
 
 try:
     import soundfile as sf
@@ -80,18 +80,19 @@ def validate_show(
     report = ValidationReport()
 
     # identifier validity and uniqueness
-    seen: set[str] = set()
+    seen = {}
     for cue in cue_set.cues:
         if not validate_identifier(cue.identifier):
             report.add(Severity.CRITICAL, cue.identifier,
                        f"Identifier '{cue.identifier}' does not follow the "
                        "script-page convention (page.number).",
                        "Rename to e.g. 12.0 or 47.21.")
-        if cue.identifier in seen:
+        key = identifier_key(cue.identifier)
+        if key in seen:
             report.add(Severity.CRITICAL, cue.identifier,
-                       f"Duplicate cue identifier '{cue.identifier}'.",
-                       "Identifiers must be unique within a cue set.")
-        seen.add(cue.identifier)
+                       f"Duplicate cue identifier '{cue.identifier}' (same number as '{seen[key]}').",
+                       "Cue identifiers must be unique as text; 12.1 and 12.10 are distinct.")
+        seen[key] = cue.identifier
 
     # duplicate internal IDs (stable target references depend on them)
     seen_iids: set[str] = set()
@@ -192,4 +193,12 @@ def validate_show(
                    "Selected audio output device is unavailable.",
                    "Select a replacement output device and re-prepare.")
 
+    for message in cue_set.profile.errors():
+        report.add(Severity.CRITICAL, None, message, "Open Profile & Routing in Edit Mode.")
+    bus_ids = {bus.id for bus in cue_set.profile.buses}
+    for cue in cue_set.cues:
+        if cue.is_play_sound() and (not cue.bus_ids or not set(cue.bus_ids) <= bus_ids):
+            report.add(Severity.CRITICAL, cue.identifier, "Choose valid output buses in the Advanced Cue Editor.")
+    if not cue_set.profile.backup_device:
+        report.add(Severity.WARNING, None, "No backup output configured.")
     return report

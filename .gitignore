@@ -34,3 +34,15 @@ Desktop.ini
 
 # Editor local settings
 # .vscode/
+
+# Generated GUI review images and isolated preview preferences
+output/gui-review/
+
+# Google Drive native-document shortcuts are cloud placeholders, not source files.
+*.gdoc
+*.gsheet
+*.gslides
+*.gdraw
+*.gform
+*.gmap
+*.gsite

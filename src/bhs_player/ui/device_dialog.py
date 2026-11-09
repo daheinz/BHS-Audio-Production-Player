@@ -34,7 +34,8 @@ class DeviceDialog(QDialog):
         layout = QVBoxLayout(self)
         if reason:
             lbl = QLabel(reason)
-            lbl.setStyleSheet("color: #e0a0a0; font-weight: bold;")
+            lbl.setProperty("tone", "warning")
+            lbl.setStyleSheet("font-weight: bold")
             lbl.setWordWrap(True)
             layout.addWidget(lbl)
 

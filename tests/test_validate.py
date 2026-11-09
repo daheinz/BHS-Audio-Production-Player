@@ -50,7 +50,7 @@ def test_unassigned_play_cue_is_critical(tmp_path):
 
 def test_duplicate_identifiers_critical(tmp_path):
     cs = good_show(tmp_path)
-    cs.insert(Cue(identifier="12.0", action=ActionType.PLAY,
+    cs.cues.append(Cue(identifier="12.0", action=ActionType.PLAY,
                   audio_file="audio/a.wav"))
     report = validate_show(cs, play_folder=tmp_path)
     assert any("Duplicate" in i.message for i in report.critical)

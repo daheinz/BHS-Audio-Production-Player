@@ -82,6 +82,22 @@ class CueEngine:
         # Preload the initially armed cue (Section 15).
         self._preload_armed()
 
+    @property
+    def waiting_cue(self):
+        return self.cue_set.by_internal_id(self._waiting_on) if self._waiting_on else None
+
+    def interrupt_output(self, disarm=False):
+        """Cancel stale advancement before stopping audio; preserve independent arming."""
+        waiting = self.waiting_cue
+        self._waiting_on = None
+        if waiting is not None:
+            waiting.execution_state = CueExecutionState.INTERRUPTED
+            self.pointer = None
+        if disarm:
+            self._disarm_current()
+            self.pointer = None
+        self.audio.stop_all()
+
     # ---- state queries -------------------------------------------------
 
     @property
@@ -176,12 +192,11 @@ class CueEngine:
             self._finish_action_cue(cue)
         elif cue.action is ActionType.FADE:
             if instances:
-                for inst in instances:
-                    self.audio.fade_instance(inst, cue.fade_duration)
-                # FADE completes when its fade finishes; notify via
-                # notify_fade_finished(). Until then, cue is PLAYING.
+                # Set the wait before callbacks: zero-length fades end immediately.
                 cue.execution_state = CueExecutionState.PLAYING
                 self._waiting_on = cue.internal_id
+                for inst in instances:
+                    self.audio.fade_instance(inst, cue.fade_duration)
                 return GoResult(ok=True, cue=cue)
             # valid target not playing: visible no-op, completes immediately
             self._finish_action_cue(cue)
@@ -246,8 +261,9 @@ class CueEngine:
         cue = self.cue_set.by_internal_id(cue_internal_id)
         if cue is None or cue.action is not ActionType.FADE:
             return
-        if self._waiting_on == cue_internal_id:
-            self._waiting_on = None
+        if self._waiting_on != cue_internal_id:
+            return
+        self._waiting_on = None
         self._finish_action_cue(cue)
 
     # ---- navigation -----------------------------------------------------
@@ -287,13 +303,7 @@ class CueEngine:
         """Emergency STOP ALL (Section 3): stops audio, executes no cue,
         changes no armed cue; if an On Complete wait was interrupted,
         nothing remains armed."""
-        self.audio.stop_all()
-        if self._waiting_on is not None:
-            cue = self.cue_set.by_internal_id(self._waiting_on)
-            if cue is not None:
-                cue.execution_state = CueExecutionState.INTERRUPTED
-            self._waiting_on = None
-            self.pointer = None
+        self.interrupt_output()
 
     # ---- internals ------------------------------------------------------
 

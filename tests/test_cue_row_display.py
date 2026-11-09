@@ -98,7 +98,7 @@ def test_play_tooltip_explains_fields():
               audio_file="audio/rain.wav", notes="under window")
     tip = cue_row_tooltip(cue, CueSet(play_name="X"))
     assert "Volume: 80%" in tip
-    assert "relative to the Master Output" in tip
+    assert "before the assigned bus output" in tip
     assert "Fade-In" in tip and "Fade-Out" in tip
     assert "Loop: On" in tip
     assert "On GO" in tip and "overlap" in tip
@@ -131,9 +131,10 @@ def test_edit_list_rows_have_tooltips(qapp, tmp_path):
     pf = PlayFolder(tmp_path, "Clue")
     win = EditWindow(cs, AudioEngine(Mixer(SR)), pf)
     item = win.list.item(0)
-    assert "Vol 80%" in item.text()
+    assert win.list.item(0, 7).text() == "80%"
     assert item.toolTip()  # mouse-over help present
-    assert "Volume: 80%" in item.toolTip()
+    assert "Volume Percent: 80%" in win.list.item(0, 7).toolTip()
+    assert "Volume" not in item.toolTip()
 
 
 def test_show_list_rows_have_tooltips(qapp):
@@ -145,7 +146,7 @@ def test_show_list_rows_have_tooltips(qapp):
     audio = AudioEngine(Mixer(SR))
     win = MainWindow(cs, CueEngine(cs, audio), audio)
     item = win.cue_list.item(0)
-    assert "Vol 50%" in item.text()
+    assert win.cue_list.item(0, 7).text() == "50%"
     assert item.toolTip()
 
 
@@ -177,4 +178,4 @@ def test_editor_fields_have_tooltips(qapp):
                    dlg.end_spin, dlg.target_combo, dlg.fade_dur_spin):
         assert widget.toolTip(), f"{widget} missing tooltip"
     assert "page.subcue" in dlg.ident_edit.toolTip()
-    assert "Master Output" in dlg.volume_spin.toolTip()
+    assert "Bus Output" in dlg.volume_spin.toolTip()

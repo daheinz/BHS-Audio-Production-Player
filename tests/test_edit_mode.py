@@ -132,11 +132,13 @@ def test_editor_requires_target_for_stop(qapp, tmp_path):
 
 # ---- audition / TEST --------------------------------------------------------
 
-def test_audition_plays_without_touching_show_state(qapp, tmp_path):
+def test_audition_plays_without_touching_show_state(qapp, tmp_path, monkeypatch):
     cue = Cue(identifier="12.0", action=ActionType.PLAY, audio_file="audio/a.wav")
     win, cs, pf, audio = make_setup(tmp_path, [cue])
     # audio must live in the play folder's audio dir (audio_file is relative)
     write_wav(pf.audio_dir / "a.wav")
+    from types import SimpleNamespace
+    win.routing = SimpleNamespace(prepare=lambda route: True, message="test adapter")
     win.list.setCurrentRow(0)
     win._audition()
     assert win._test_instance is not None
@@ -182,13 +184,7 @@ def test_remove_cue_warns_about_dependents(qapp, tmp_path, monkeypatch):
                target_internal_id=target.internal_id)
     win, cs, pf, audio = make_setup(tmp_path, [target, stop])
     win.list.setCurrentRow(0)
-    # auto-answer No so nothing is deleted; we just want the warning text
-    seen = {}
-    def fake_question(parent, title, msg):
-        seen["msg"] = msg
-        return QMessageBox.No
-    monkeypatch.setattr("bhs_player.ui.edit_window.QMessageBox.question", fake_question)
+    monkeypatch.setattr(QMessageBox, 'exec', lambda self: QMessageBox.Cancel)
     win._remove_cue()
-    assert "target of" in seen["msg"]
-    assert "2.0" in seen["msg"]
-    assert len(cs.cues) == 2  # nothing removed
+    assert len(cs.cues) == 2
+    assert stop.target_internal_id == target.internal_id

@@ -34,7 +34,7 @@ def test_identifiers_unique_detection():
     cs.insert(Cue(identifier="12.0"))
     cs.insert(Cue(identifier="12.1"))
     assert cs.identifiers_unique()
-    cs.insert(Cue(identifier="12.0"))
+    cs.cues.append(Cue(identifier="12.0"))
     assert not cs.identifiers_unique()
 
 
@@ -42,9 +42,9 @@ def test_performance_order_independent_of_identifier_sort():
     cs = CueSet(play_name="Clue")
     cs.insert(Cue(identifier="47.2"))
     cs.insert(Cue(identifier="12.1"))
-    cs.insert(Cue(identifier="12.10"))
+    cs.insert(Cue(identifier="12.11"))
     order = [c.identifier for c in cs.performance_order()]
-    assert order == ["47.2", "12.1", "12.10"]
+    assert order == ["47.2", "12.1", "12.11"]
 
 
 def test_explicit_insert_between_identifiers_no_reorder():
@@ -54,11 +54,11 @@ def test_explicit_insert_between_identifiers_no_reorder():
     middle = Cue(identifier="12.1")
     cs.insert(middle, index=1)
     assert [c.identifier for c in cs.performance_order()] == ["12.0", "12.1", "12.2"]
-    # moving 12.10 between 12.1 and 12.2 must keep that position exactly
-    late = Cue(identifier="12.10")
+    # Inserting 12.11 between 12.1 and 12.2 keeps that position exactly.
+    late = Cue(identifier="12.11")
     cs.insert(late, index=2)
     assert [c.identifier for c in cs.performance_order()] == [
-        "12.0", "12.1", "12.10", "12.2",
+        "12.0", "12.1", "12.11", "12.2",
     ]
 
 
