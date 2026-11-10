@@ -89,6 +89,8 @@ class ProductionController(QObject):
             self.edit._save = lambda: True
 
     def enter_show(self, rehearsal=False):
+        if self._entry_check is not None:
+            return
         if self.show_window is not None:
             self.show_window.raise_()
             return
@@ -116,7 +118,11 @@ class ProductionController(QObject):
                     checked_cues = deepcopy(self.cue_set)
                     folder = self.folder.folder if self.folder else None
                     ready = self.audio.ready
-                    self._entry_check = FileTask(lambda: (validate_show(checked_cues, folder, output_device_available=ready), snapshot, rehearsal))
+                    task = FileTask(lambda: (validate_show(checked_cues, folder, output_device_available=ready,
+                                                          progress=task.signals.progress.emit), snapshot, rehearsal))
+                    self._entry_check = task
+                    task.signals.progress.connect(self._entry_progress)
+                    self.edit.set_entry_busy(True, rehearsal)
                     self._entry_check.signals.done.connect(self._entry_checked)
                     self.edit.status_lbl.setText("Checking cue and output readiness...")
                     QThreadPool.globalInstance().start(self._entry_check)
@@ -162,9 +168,15 @@ class ProductionController(QObject):
         self.edit.setEnabled(False)
         win.show()
 
+    @Slot(int, int, str)
+    def _entry_progress(self, done, total, detail):
+        if self._entry_check is not None:
+            self.edit.entry_progress.update_progress(done, total, detail)
+
     @Slot(object, str)
     def _entry_checked(self, result, error):
         self._entry_check = None
+        self.edit.set_entry_busy(False)
         if error:
             self.edit.status_lbl.setText("Audio readiness check failed: " + error)
             return

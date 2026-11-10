@@ -59,7 +59,7 @@ def test_stack_is_bottom_aligned_and_scrollable_without_moving_armed(show, qtbot
     assert not entry.findChildren(LevelMeter)
     assert entry.geometry().bottom() >= show.stack_scroll.viewport().height()-5
     assert entry.height() < 130
-    assert entry.stop_btn.toolTip() == "Stop this playback"
+    assert entry.stop_btn.toolTip() == "Stop this playback and run Next Cue Action"
     assert entry.fade_btn.toolTip() == "Fade out this playback"
     armed_top = show.armed_panel.geometry().top()
     for _ in range(5):

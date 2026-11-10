@@ -30,7 +30,8 @@ def fingerprint(path):
     return str(path), stat.st_size, stat.st_mtime_ns
 
 
-def inspect_audio(path, full=False, force=False):
+def inspect_audio(path, full=False, force=False, analyze_peaks=False):
+    full = full or analyze_peaks
     key = fingerprint(path)
     if force:
         with _LOCK:
@@ -41,11 +42,11 @@ def inspect_audio(path, full=False, force=False):
     cache_key = (key, "validate" if full else "probe")
     with _LOCK:
         cached = _CACHE.get(cache_key) or (None if full else _CACHE.get((key,"validate")))
-    if cached:
+    if cached and (not analyze_peaks or "sample_peak" in cached):
         return dict(cached)
     if not force:
         cached = disk_cache.read_metadata(key, full)
-        if cached:
+        if cached and (not analyze_peaks or "sample_peak" in cached):
             with _LOCK:_CACHE[cache_key]=cached
             return dict(cached)
     result, pcm = _run(path, "validate" if full else "probe",rate=44100 if full else None)

@@ -77,6 +77,7 @@ class Voice:
         # per-instance meter peaks, post cue-volume/fades (Section 8)
         self.last_peak_l = 0.0
         self.last_peak_r = 0.0
+        self._fade_completes_naturally = False
         self._fade_remaining = 0
         self._fade_total = 0
         # Fade-out start level captures ONLY the fade-in envelope factor, not
@@ -89,7 +90,8 @@ class Voice:
         self._fade_in_total = self._fade_in_remaining
 
     # -- control ---------------------------------------------------------
-    def start_fade_out(self, duration: float) -> None:
+    def start_fade_out(self, duration: float, complete_naturally: bool = False) -> None:
+        self._fade_completes_naturally = complete_naturally
         frames = int(duration * self.sample_rate)
         if frames <= 0:
             self.stopped = True  # zero duration = immediate stop (Section 5)
@@ -121,6 +123,8 @@ class Voice:
         written = 0
         while written < nframes and not self.stopped:
             chunk = min(nframes - written, self.frames - self.pos)
+            if self.fading and self._fade_remaining > 0:
+                chunk = min(chunk, self._fade_remaining)
             if chunk <= 0:
                 if self.looping:
                     self.pos = 0
@@ -151,6 +155,7 @@ class Voice:
                 seg = seg * fo[:, None]
                 self._fade_remaining -= chunk
                 if self._fade_remaining <= 0:
+                    self.completed_naturally = self._fade_completes_naturally
                     self.stopped = True
             out[written:written + chunk] = seg
             self.pos += chunk
@@ -523,13 +528,14 @@ class AudioEngine:
         """Public accessor for the UI (per-instance progress/meters)."""
         return self._find(instance)
 
-    def stop_instance(self, instance) -> None:
+    def stop_instance(self, instance, complete_naturally: bool = False) -> None:
         v = self._find(instance)
         if v:
             v.stop()
             instance.stopped = True
+            instance.completed_naturally = complete_naturally
             self._drop(instance)
-            self._emit_ended(instance, natural=False)
+            self._emit_ended(instance, natural=complete_naturally)
 
     def set_instance_level(self, instance, level: float) -> bool:
         """Change one live voice, without changing its cue or bus level."""
@@ -562,6 +568,18 @@ class AudioEngine:
                 return
             v.start_fade_out(duration)
             instance.fading = True
+
+    def finish_instance(self, instance) -> bool:
+        """Fade one playback for two seconds, then run normal completion actions."""
+        with self.mixer._lock:
+            voice = self._find(instance)
+            if voice is None or not voice.active:
+                return False
+            if voice.fading and voice._fade_completes_naturally:
+                return False
+            voice.start_fade_out(2.0, complete_naturally=True)
+            instance.fading = True
+            return True
 
     def stop_all(self) -> None:
         ended = [inst for voice, inst in list(self._instances.values())]

@@ -104,7 +104,7 @@ def test_individual_stop_releases_on_complete_wait(tmp_path):
     result = eng.go()
     assert result.ok, result.reason
     inst = audio.active_instances()[0]
-    audio.stop_instance(inst)  # individual STOP from the stack
+    audio.stop_instance(inst)  # Internal interrupting stop; UI card Stop completes normally.
     assert cue.execution_state is CueExecutionState.INTERRUPTED
     assert eng.armed_cue is None  # nothing armed; operator takes control
     eng.arm_cue(cs.cues[1].internal_id)

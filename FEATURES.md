@@ -47,7 +47,7 @@ Deliberate route switches drop sounds and preserve independently armed cues; int
 - Multiple buses, mono routes, custom output-channel maps, and general combined backup feeds are configurable but not connected to playback. Those controls report unsupported status; playback/test confirmations are blocked rather than simulated.
 - Individual bus meters on combined backup remain unavailable. Intended ASIO/USB mixer compatibility is unverified.
 - Large-file bounded streaming and decoder packaging remain future backend work; AAC/M4A currently needs optional PyAV.
-- Current full suite: 347 tests passed. Automated tests and offscreen screen review are not hardware audibility, latency, reliability, or student usability verification.
+- Current full suite: 360 tests passed. Automated tests and offscreen screen review are not hardware audibility, latency, reliability, or student usability verification.
 
 ## Legacy loading
 
@@ -64,7 +64,7 @@ Show and Rehearse have an **ARM** button at the far left of every cue row. Click
 - **GO on End**: arms the next cue immediately, then automatically executes that armed cue at natural completion. Each PLAY cue must opt in separately to continue a chain.
 - **Arm Next Now**: advances when triggered, allowing overlapping sounds.
 
-Stops, navigation, manual arming, output interruption, and mode exit cancel automatic continuation. Loops require Arm Next Now. STOP/FADE/STOP ALL actions retain their existing advancement behavior. Automatic GO runs on a subsequent UI update, pauses while a modal dialog is open, and is not sample-accurate audio sequencing.
+STOP ALL, interrupting fades, navigation, manual arming, output interruption, and mode exit cancel automatic continuation. The Playing card Stop instead runs its normal Next Cue Action. Loops require Arm Next Now. STOP and FADE use their selected Next Cue Action; the STOP ALL action retains its existing advancement behavior. Automatic GO runs on a subsequent UI update, pauses while a modal dialog is open, and is not sample-accurate audio sequencing.
 
 
 ## Show keyboard controls
@@ -118,3 +118,18 @@ Show/Rehearse cue columns now use compact widths, hide Audio File, and label the
 Validated metadata and decoded playback data now persist locally across launches. Import checks retain playback-ready data; unchanged and identical audio can reuse it after RAM eviction or reopening the app. The next cue preloads ahead, RAM entries use LRU access, and UI refresh avoids repeated file-identity reads. GO still waits for uncached preparation and all decoder safeguards remain enabled.
 
 Edit now includes **Recheck Audio** for an explicit full rescan. Open Play sorts by last successful open, independently of saving; canceled/failed opens do not affect order. The bounded 512 MiB disk cache is under LocalAppData/BHS Audio Production Player/audio-cache, outside the synced project folder. See [Performance and recent-play guide](Documentation/PLAYBACK-PERFORMANCE.md).
+
+- Mode-entry readiness progress beside the controls: disabled waiting buttons, current cue, progress bar, and adaptive estimated countdown; automatic continuation when ready.
+
+
+Each Playing card also has a **2s fade-and-complete** icon beside Stop and the configured Fade control. It fades only that playback over two seconds (or ends at its earlier natural end), including repeating playback, then reports normal completion. The saved Next Cue Action applies: GO on End automatically starts the armed cue; Arm Next at End arms the successor; Arm Next Now keeps its already armed cue. Saved level, repeat and fade settings are unchanged. Repeated presses cannot extend this fade. The card Stop button completes normally immediately and honors Next Cue Action; STOP ALL cancels automatic continuation. The existing configured fade remains an interrupted ending.
+
+
+Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
+
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+
+The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
+
+
+Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.

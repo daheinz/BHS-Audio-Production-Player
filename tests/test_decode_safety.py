@@ -291,10 +291,16 @@ def test_mode_entry_audio_checks_do_not_block_gui(tmp_path,qtbot,monkeypatch):
     monkeypatch.setattr("bhs_player.app.validate_show",check)
     started=time.monotonic();controller.enter_show(rehearsal=True)
     assert time.monotonic()-started<.2 and controller.show_window is None
+    assert not controller.edit.show_btn.isEnabled()
+    assert not controller.edit.rehearse_btn.isEnabled()
+    assert not controller.edit.entry_progress.isHidden()
+    assert "remaining (estimate)" in controller.edit.entry_progress.label.text()
     ticks=[];QTimer.singleShot(20,lambda:ticks.append(True))
     qtbot.waitUntil(lambda:bool(ticks))
     gate.set();qtbot.waitUntil(lambda:controller.show_window is not None,timeout=5000)
     qtbot.addWidget(controller.show_window)
+    assert controller.edit.entry_progress.isHidden()
+    assert not controller.edit.entry_progress.timer.isActive()
     controller.show_window.close()
 
 
@@ -383,3 +389,36 @@ def test_small_clean_mp3_eof_is_allowed_only_at_file_end():
     assert not tolerable_mp3_eof('MP3',171610,44100,171610,150000,21610)
     assert not tolerable_mp3_eof('MP3',171610,44100,165000,162432,2568)
     assert not tolerable_mp3_eof('MP3',1000,44100,1000,0,1000)
+
+
+def test_entry_progress_reports_overrun_without_false_ready(qtbot):
+    from bhs_player.ui.mode_entry import ModeEntryProgress
+    widget=ModeEntryProgress()
+    qtbot.addWidget(widget)
+    widget.begin(10)
+    widget.update_progress(3,10,"Checking cue 41.0")
+    assert widget.bar.value()==3
+    assert "Checking cue 41.0" in widget.label.text()
+    widget.deadline=time.monotonic()-1
+    widget.refresh()
+    assert "Taking longer" in widget.label.text()
+    assert "0s remaining" not in widget.label.text()
+    widget.finish()
+    assert not widget.timer.isActive()
+
+
+def test_entry_failure_restores_mode_controls(tmp_path,qtbot,monkeypatch):
+    from bhs_player.app import ProductionController
+    path=wave(tmp_path)
+    controller=ProductionController(CueSet("Entry failure",[Cue("1.0",audio_file=str(path))]))
+    qtbot.addWidget(controller.edit)
+    monkeypatch.setattr(controller.routing,"prepare",lambda route:controller.audio.set_ready(True) or True)
+    def fail(*args,**kwargs):
+        raise RuntimeError("Test readiness failure")
+    monkeypatch.setattr("bhs_player.app.validate_show",fail)
+    controller.enter_show()
+    qtbot.waitUntil(lambda:controller._entry_check is None)
+    assert controller.edit.show_btn.isEnabled()
+    assert controller.edit.rehearse_btn.isEnabled()
+    assert controller.edit.entry_progress.isHidden()
+    assert "Test readiness failure" in controller.edit.status_lbl.text()

@@ -143,10 +143,10 @@ class CueEditorDialog(QDialog):
             self.advance_combo.addItem(mode.label, mode)
         self.advance_combo.setCurrentIndex(self.advance_combo.findData(cue.advance_mode))
         self.advance_combo.setToolTip(
-            "Arm Next at End: wait for natural end, then arm the next cue. "
-            "GO on End: arm the next cue now, then execute it at natural end. "
-            "Arm Next Now: arm the next cue immediately so "
-            "sounds can overlap; the sound keeps playing independently.")
+            "Arm Next at End: arm the next cue when this action finishes. "
+            "GO on End: arm the next cue now, then execute it when this action finishes. "
+            "Arm Next Now: arm the next cue immediately without automatic GO. "
+            "Fade finishes after its fade; Stop finishes immediately.")
         form.addRow("Next Cue Action", self.advance_combo)
 
         self.behavior_combo = QComboBox()
@@ -295,9 +295,10 @@ class CueEditorDialog(QDialog):
         is_stopfade = action in (ActionType.STOP, ActionType.FADE)
 
         for w in (self.file_row, self.volume_spin, self.fade_in_spin,
-                  self.fade_out_spin, self.loop_check, self.advance_combo,
+                  self.fade_out_spin, self.loop_check,
                   self.behavior_combo, self.start_spin, self.end_spin):
             w.setEnabled(is_play)
+        self.advance_combo.setEnabled(is_play or is_stopfade)
         self.file_label.setEnabled(is_play)
         for _, check in self.bus_checks:
             check.setEnabled(is_play)
@@ -321,7 +322,7 @@ class CueEditorDialog(QDialog):
             self.error_lbl.setText("An audio check is already running.")
             return
         from ..audio.safe_decode import inspect_audio
-        self._import_job = FileTask(lambda: (inspect_audio(path, full=True), path))
+        self._import_job = FileTask(lambda: (inspect_audio(path, full=True, analyze_peaks=True), path))
         self._import_job.signals.done.connect(self._audio_checked)
         self.error_lbl.setText("Checking audio before import...")
         QThreadPool.globalInstance().start(self._import_job)
@@ -335,10 +336,14 @@ class CueEditorDialog(QDialog):
             self.error_lbl.setText("Audio import rejected: " + error[:220] + " See Diagnostics / Logs.")
             return
         try:
-            _, path = result
+            metadata, path = result
             rel = self.play_folder.import_audio(Path(path), prevalidated=True)
             self.file_row.setText(str(rel).replace("\\", "/"))
-            self.error_lbl.setText("")
+            from .import_warnings import show_import_warnings
+            candidate = replace(self.cue, volume=self.volume_spin.value() / 100,
+                                bus_ids=[bus_id for bus_id, check in self.bus_checks if check.isChecked()])
+            warning = show_import_warnings(self, metadata, candidate, self.cue_set.profile)
+            self.error_lbl.setText("Imported - level warning; see warning dialog." if warning else "")
         except Exception as exc:
             self.error_lbl.setText("Audio import rejected: " + str(exc)[:220])
 
@@ -366,6 +371,8 @@ class CueEditorDialog(QDialog):
         cue.name = self.name_edit.text().strip()
         cue.action = action
         cue.notes = self.notes_edit.text().strip()
+        if action in (ActionType.PLAY, ActionType.STOP, ActionType.FADE):
+            cue.advance_mode = self.advance_combo.currentData()
 
         if action is ActionType.PLAY:
             cue.audio_file = self.file_row.text().strip() or None

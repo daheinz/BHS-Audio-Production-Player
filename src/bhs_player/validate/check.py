@@ -63,6 +63,7 @@ def validate_show(
     cue_set: CueSet,
     play_folder: Optional[Path] = None,
     output_device_available: bool = True,
+    progress=None,
 ) -> ValidationReport:
     """Run the full Section-19 check list."""
     report = ValidationReport()
@@ -92,7 +93,9 @@ def validate_show(
         seen_iids.add(cue.internal_id)
 
     verified: set[str] = set()
-    for cue in cue_set.cues:
+    for index, cue in enumerate(cue_set.cues):
+        if progress:
+            progress(index, len(cue_set.cues), f"Checking cue {cue.identifier}")
         if cue.action is ActionType.PLAY:
             # assigned file
             if not cue.audio_file:
@@ -174,6 +177,8 @@ def validate_show(
                            "Fade duration must be nonnegative.",
                            "Use 0 for an immediate stop.")
 
+    if progress:
+        progress(len(cue_set.cues), len(cue_set.cues), "Checking output and routing")
     report.verified_audio_files = len(verified)
 
     if not output_device_available:

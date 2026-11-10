@@ -78,6 +78,7 @@ class CueEngine:
         self._waiting_instance = None
         self._pending_auto_go = None
         self._control_epoch = 0
+        self._running_fades = {}
         if self.pointer is not None:
             cue_set.cues[0].execution_state = CueExecutionState.ARMED
         # Unified completion wiring: every audio instance end (natural, early
@@ -104,6 +105,11 @@ class CueEngine:
         if disarm:
             self._disarm_current()
             self.pointer = None
+        for internal_id in self._running_fades:
+            fade = self.cue_set.by_internal_id(internal_id)
+            if fade and fade.execution_state in (CueExecutionState.PLAYING, CueExecutionState.TRIGGERED):
+                fade.execution_state = CueExecutionState.INTERRUPTED
+        self._running_fades.clear()
         self.audio.stop_all()
 
     def reset_session(self):
@@ -234,6 +240,14 @@ class CueEngine:
             return GoResult(ok=False, reason="Invalid target", cue=cue)
 
         instances = self.audio.instances_of(target.internal_id)
+        action_log = logging.getLogger("bhs_player.cues")
+        action_log.info("ACTION TARGET cue=%s action=%s target=%s target_name=%r duration=%s active_playbacks=%s next=%s",
+                        cue.identifier, cue.action.value, target.identifier, target.name,
+                        cue.fade_duration if cue.action is ActionType.FADE else 0,
+                        len(instances), cue.advance_mode.value)
+        if not instances:
+            action_log.warning("ACTION NO AUDIO EFFECT cue=%s target=%s reason=target is not playing",
+                               cue.identifier, target.identifier)
         if cue.action is ActionType.STOP:
             for inst in instances:
                 self.audio.stop_instance(inst)
@@ -241,11 +255,21 @@ class CueEngine:
         elif cue.action is ActionType.FADE:
             if instances:
                 # Set the wait before callbacks: zero-length fades end immediately.
-                cue.execution_state = CueExecutionState.PLAYING
-                self._waiting_on = cue.internal_id
-                self._waiting_instance = None
+                self._running_fades[cue.internal_id] = {id(inst) for inst in instances}
+                if cue.advance_mode is AdvanceMode.ON_GO:
+                    cue.execution_state = CueExecutionState.TRIGGERED
+                    self._advance_pointer()
+                else:
+                    cue.execution_state = CueExecutionState.PLAYING
+                    self._waiting_on = cue.internal_id
+                    self._waiting_instance = None
+                    if cue.advance_mode is AdvanceMode.ON_COMPLETE_GO:
+                        self._advance_pointer()
                 for inst in instances:
                     self.audio.fade_instance(inst, cue.fade_duration)
+                # Also support synchronous zero fades/backends without callbacks.
+                if cue.fade_duration <= 0 and cue.internal_id in self._running_fades:
+                    self.notify_fade_finished(cue.internal_id)
                 return GoResult(ok=True, cue=cue)
             # valid target not playing: visible no-op, completes immediately
             self._finish_action_cue(cue)
@@ -265,18 +289,17 @@ class CueEngine:
             return
         self.notify_sound_finished(instance.cue_internal_id, natural, instance)
 
-        # If a FADE action cue is waiting and its target no longer has any
-        # active instances, the fade has finished -> complete the FADE cue.
-        if self._waiting_on is not None:
-            waiting_cue = self.cue_set.by_internal_id(self._waiting_on)
-            if waiting_cue is not None and waiting_cue.action is ActionType.FADE:
-                if not self.audio.instances_of(waiting_cue.target_internal_id):
-                    self.notify_fade_finished(waiting_cue.internal_id)
+        # Track the instances this fade actually targeted, including Arm Next Now
+        # fades that continue after the operator starts a later cue.
+        for internal_id, pending in list(self._running_fades.items()):
+            pending.discard(id(instance))
+            if not pending:
+                self.notify_fade_finished(internal_id)
 
     def notify_sound_finished(self, cue_internal_id: str, natural: bool, instance=None) -> None:
         """Called when a sound instance ends.
 
-        natural=True: reached its End Position / natural file end.
+        natural=True: reached its End Position / natural file end, or operator completed it.
         natural=False: manually stopped or faded early.
         """
         cue = self.cue_set.by_internal_id(cue_internal_id)
@@ -322,7 +345,10 @@ class CueEngine:
         cue = self.cue_set.by_internal_id(cue_internal_id)
         if cue is None or cue.action is not ActionType.FADE:
             return
+        running = self._running_fades.pop(cue_internal_id, None)
         if self._waiting_on != cue_internal_id:
+            if running is not None and cue.execution_state is CueExecutionState.TRIGGERED:
+                cue.execution_state = CueExecutionState.COMPLETE
             return
         self._waiting_on = None
         self._finish_action_cue(cue)
@@ -372,7 +398,7 @@ class CueEngine:
 
     def _release_completion_wait(self):
         waiting = self.waiting_cue
-        if waiting is not None and waiting.is_play_sound() and waiting.execution_state is CueExecutionState.PLAYING:
+        if waiting is not None and waiting.execution_state is CueExecutionState.PLAYING:
             waiting.execution_state = CueExecutionState.TRIGGERED
         self._waiting_on = None
         self._waiting_instance = None
@@ -404,7 +430,11 @@ class CueEngine:
 
     def _finish_action_cue(self, cue: Cue) -> None:
         cue.execution_state = CueExecutionState.COMPLETE
-        self._advance_pointer()
+        # GO on End / Arm Next Now may already have armed the successor.
+        if self.armed_cue is cue:
+            self._advance_pointer()
+        if cue.action in (ActionType.STOP, ActionType.FADE) and cue.advance_mode is AdvanceMode.ON_COMPLETE_GO and self.armed_cue is not None:
+            self._pending_auto_go = (self.armed_cue.internal_id, self._control_epoch)
 
     def _advance_pointer(self) -> None:
         """Arm the next cue in performance order; never auto-executes.

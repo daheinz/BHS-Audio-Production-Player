@@ -36,6 +36,6 @@ Recency is an application preference in settings.ini, keyed by production-folder
 
 ## Verification
 
-347 automated tests pass. Thirteen new cases cover persistent validation, changed-file invalidation, PCM reuse after RAM loss, corruption fallback, cache bounds/failure, manual recheck, reduced identity polling, successor preloading, copied/identical asset reuse, and successful/canceled/failed opening order.
+360 automated tests pass. Thirteen new cases cover persistent validation, changed-file invalidation, PCM reuse after RAM loss, corruption fallback, cache bounds/failure, manual recheck, reduced identity polling, successor preloading, copied/identical asset reuse, and successful/canceled/failed opening order.
 
 Offline checks with the real Clue 26 recordings observed an uncached long MP3 taking several seconds to decode, a RAM-evicted reload around 0.23 seconds, and persisted validation around 13 ms. With content reuse and local storage, cue 43 reused cue 34's audio in about 0.11 seconds and cue 34 reloaded in about 0.08 seconds. These timings are observations on this machine, not latency guarantees or physical audio verification.

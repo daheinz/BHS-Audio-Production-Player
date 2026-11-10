@@ -43,7 +43,7 @@ FIELD_HELP = {
     'action': 'Play starts a sound; Stop stops the target; Fade fades the target to silence; Stop All stops every sound.',
     'audio_file': 'Sound file path. Edit this cell to choose a file. Files are imported into the play folder when available.',
     'notes': 'Operator notes, such as the line or stage movement that triggers this cue.',
-    'advance_mode': 'Arm Next at End waits for natural completion and arms the next cue. GO on End arms the next cue immediately and executes that armed cue at natural completion. Arm Next Now arms it immediately for overlap. Stops and interruptions never cause automatic GO. Loops require Arm Next Now.',
+    'advance_mode': 'Arm Next at End arms the next cue when this action finishes. GO on End arms it now and executes it when this action finishes. Arm Next Now arms it immediately without automatic GO. For Fade, completion waits for the fade; Stop completes immediately. Loops require Arm Next Now.',
     'on_go_behavior': 'Add to Play Stack keeps existing sounds playing. Stop Prev. and Add stops the most recent sound. Stop All and Add stops all existing sounds.',
     'volume': 'Playback volume as a percentage before the assigned bus output level. 100% is unity; 50% is half; 200% is double and may clip.',
     'loop': 'Repeat the sound segment until stopped or faded. Loop requires Next Cue Action Arm Next Now.',
@@ -302,6 +302,8 @@ class CueTable(QTableWidget):
     def applicable(self, cue, field):
         if field in ('identifier', 'name', 'action', 'notes'):
             return True
+        if field == 'advance_mode':
+            return cue.action in (ActionType.PLAY, ActionType.STOP, ActionType.FADE)
         if field == 'target_internal_id':
             return cue.action in (ActionType.STOP, ActionType.FADE)
         if field == 'fade_duration':
@@ -370,7 +372,7 @@ class CueTable(QTableWidget):
         token = uuid.uuid4().hex
         old_file = cue.audio_file
         from ..audio.safe_decode import inspect_audio
-        task = FileTask(lambda: (inspect_audio(path, full=True), cue_id, token, path, old_file))
+        task = FileTask(lambda: (inspect_audio(path, full=True, analyze_peaks=True), cue_id, token, path, old_file))
         self._audio_imports[cue_id] = (token, task)
         task.signals.done.connect(self._audio_checked)
         self.audioImportStatus.emit("Checking audio before import: " + Path(path).name)
@@ -386,7 +388,7 @@ class CueTable(QTableWidget):
                     self.editRejected.emit("Audio import rejected: " + error[:220] + " See Diagnostics / Logs.")
                     break
             return
-        _, cue_id, token, path, old_file = result
+        metadata, cue_id, token, path, old_file = result
         current = self._audio_imports.get(cue_id)
         if not current or current[0] != token:
             return
@@ -396,7 +398,10 @@ class CueTable(QTableWidget):
         if cue is None or row is None or cue.audio_file != old_file:
             return
         if self.commit(row, 'audio_file', path, prevalidated=True):
-            self.audioImportStatus.emit("Audio checked and imported: " + Path(path).name)
+            from .import_warnings import show_import_warnings
+            warning = show_import_warnings(self, metadata, cue, self.cue_set.profile)
+            self.audioImportStatus.emit(("Audio imported - WARNING: " + warning) if warning
+                                        else "Audio checked and imported: " + Path(path).name)
 
     def rebuild(self):
         self._restore_widths()

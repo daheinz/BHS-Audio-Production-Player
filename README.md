@@ -104,7 +104,7 @@ Show and Rehearse have an **ARM** button at the far left of every cue row. Click
 - **GO on End**: arms the next cue immediately, then automatically executes that armed cue at natural completion. Each PLAY cue must opt in separately to continue a chain.
 - **Arm Next Now**: advances when triggered, allowing overlapping sounds.
 
-Stops, navigation, manual arming, output interruption, and mode exit cancel automatic continuation. Loops require Arm Next Now. STOP/FADE/STOP ALL actions retain their existing advancement behavior. Automatic GO runs on a subsequent UI update, pauses while a modal dialog is open, and is not sample-accurate audio sequencing.
+STOP ALL, interrupting fades, navigation, manual arming, output interruption, and mode exit cancel automatic continuation. The Playing card Stop instead runs its normal Next Cue Action. Loops require Arm Next Now. STOP and FADE use their selected Next Cue Action; the STOP ALL action retains its existing advancement behavior. Automatic GO runs on a subsequent UI update, pauses while a modal dialog is open, and is not sample-accurate audio sequencing.
 
 
 The **Next Cue Action** column (formerly Advance Mode) uses **Arm Next Now**, **Arm Next at End**, and **GO on End**. Stored values remain compatible. GO on End now visibly arms its successor during playback, then executes that armed cue at completion.
@@ -153,3 +153,8 @@ Show/Rehearse cue columns now use compact widths, hide Audio File, and label the
 Validated metadata and decoded playback data now persist locally across launches. Import checks retain playback-ready data; unchanged and identical audio can reuse it after RAM eviction or reopening the app. The next cue preloads ahead, RAM entries use LRU access, and UI refresh avoids repeated file-identity reads. GO still waits for uncached preparation and all decoder safeguards remain enabled.
 
 Edit now includes **Recheck Audio** for an explicit full rescan. Open Play sorts by last successful open, independently of saving; canceled/failed opens do not affect order. The bounded 512 MiB disk cache is under LocalAppData/BHS Audio Production Player/audio-cache, outside the synced project folder. See [Performance and recent-play guide](Documentation/PLAYBACK-PERFORMANCE.md).
+
+Audio import now shows advisory source-peak/headroom and cue/bus level warnings without playing the file. Edit displays Audio Health beside TEST, with live measurements and Diagnostics / Logs access.
+
+
+Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.

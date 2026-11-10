@@ -171,4 +171,19 @@ Implemented both deferred requests and the preparation optimization. Successful 
 
 Open Play records last successful version/recovery/named-launch opens in application settings; failures and cancellations leave recency unchanged. Never-opened productions fall back alphabetically and save/version timestamps do not determine order. Cache data is outside the synced workspace under LocalAppData, with 512 MiB decoded disk and 1,024 metadata-entry bounds; production formats and source files remain unchanged.
 
-Current suite: 347 tests pass, including thirteen new cache/recency checks. Offline real-asset timing showed cue 43 content reuse at ~0.11 s and cue 34 reload at ~0.08 s; validation reuse was ~13 ms in another check. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md). Physical audio/performance verification remains outstanding.
+Current suite: 360 tests pass, including thirteen new cache/recency checks. Offline real-asset timing showed cue 43 content reuse at ~0.11 s and cue 34 reload at ~0.08 s; validation reuse was ~13 ms in another check. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md). Physical audio/performance verification remains outstanding.
+
+
+Mode entry now visibly disables both mode buttons during readiness checks. A progress panel directly above them identifies the current cue, completed/total cue count, and an approximate seconds-remaining countdown. The estimate starts at 0.25 seconds per cue (minimum one second), then adapts to observed progress; slow checks explicitly say they are taking longer. It is an estimate, not a fixed unlock delay. The requested mode opens automatically after successful checks and any required confirmation/save. Errors or edits during checking restore the controls for retry.
+
+
+Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
+
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+
+The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
+
+The Pre-Audience Audio Test dialog also includes the same live Audio Health panel, so diagnostics remain visible while that dialog is open.
+
+
+Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.

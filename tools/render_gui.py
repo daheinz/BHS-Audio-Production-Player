@@ -35,6 +35,10 @@ def capture(widget, name):
     widget.hide()
 
 capture(controller.edit, "edit")
+controller.edit.set_entry_busy(True)
+controller.edit.entry_progress.update_progress(1,4,"Checking cue 12.1")
+capture(controller.edit,"mode-entry-waiting")
+controller.edit.set_entry_busy(False)
 capture(ProfileDialog(controller.cue_set), "profile")
 capture(CueEditorDialog(controller.cue_set.cues[1], controller.cue_set), "advanced")
 controller.edit.list.setCurrentRow(3)

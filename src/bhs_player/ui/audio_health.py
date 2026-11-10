@@ -104,7 +104,7 @@ class AudioHealthPanel(QWidget):
         self._tone = None
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, idle=False):
         snapshot = self.backend.poll_diagnostics() if self.backend is not None else None
         if self.preview or snapshot is None:
             status, tone, load = ("Preview / no audio" if self.preview else "Unavailable"), "neutral", 0
@@ -119,6 +119,8 @@ class AudioHealthPanel(QWidget):
                             f"Over-budget callbacks: {snapshot.overruns} | callbacks: {snapshot.callbacks}\n"
                             f"Sample rate: {snapshot.sample_rate} | block: {snapshot.blocksize} | latency: {snapshot.latency}\n"
                             "Dropouts count driver-reported output underflows. This is not buffer fullness or speaker verification.")
+        if idle and not self.preview:
+            status, tone, load = "Idle", "neutral", 0
         if self.backend is not None and self.backend.output_lost and not self.preview:
             status, tone = "OUTPUT LOST", "error"
             detail += " | " + self.backend.output_lost_reason

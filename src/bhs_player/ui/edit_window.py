@@ -70,7 +70,7 @@ def format_cue_row(cue: Cue, cue_set: CueSet) -> str:
         tail = f"Target {tname}"
         if cue.action is ActionType.FADE:
             tail += f"  Fade {cue.fade_duration:g}s"
-        return base + "   |   " + tail
+        return base + "   |   " + tail + "  " + _ADVANCE_LABEL[cue.advance_mode]
     return base
 
 
@@ -104,6 +104,8 @@ def cue_row_tooltip(cue: Cue, cue_set: CueSet) -> str:
             "path relative to the play folder")
     elif cue.action in (ActionType.STOP, ActionType.FADE):
         target = cue_set.by_internal_id(cue.target_internal_id) if cue.target_internal_id else None
+        add("Next Cue Action", _ADVANCE_LABEL[cue.advance_mode],
+            "arm immediately, arm after this action finishes, or automatically GO on completion")
         add("Target", target.identifier if target else "(missing)",
             "the PLAY cue whose active sound this acts on")
         if cue.action is ActionType.FADE:
@@ -240,6 +242,11 @@ class EditWindow(QMainWindow):
         self.test_meter = LevelMeter()
         self.test_meter.setVisible(False)
         test_row.addWidget(self.test_meter, 1)
+        from .audio_health import AudioHealthPanel
+        self.audio_health = AudioHealthPanel(self, getattr(self.routing, "backend", None),
+                                            preview=bool(self.routing and getattr(self.routing, "preview", False)))
+        test_row.addWidget(self.audio_health)
+        self.audio_health.refresh(idle=True)
         root.addLayout(test_row)
 
         # save + enter show
@@ -251,11 +258,14 @@ class EditWindow(QMainWindow):
         save_btn.setStyleSheet("font-weight: bold; padding: 8px 20px;")
         save_btn.clicked.connect(self._save)
         row3.addWidget(save_btn)
-        show_btn = QPushButton("ENTER SHOW MODE")
+        from .mode_entry import ModeEntryProgress
+        self.entry_progress = ModeEntryProgress(self)
+        root.addWidget(self.entry_progress)
+        show_btn = self.show_btn = QPushButton("ENTER SHOW MODE")
         show_btn.setStyleSheet(
             "font-weight: bold; padding: 10px 24px; background: #2e7d32; color: white;")
         show_btn.clicked.connect(self._enter_show)
-        rehearse_btn = QPushButton("REHEARSE")
+        rehearse_btn = self.rehearse_btn = QPushButton("REHEARSE")
         rehearse_btn.clicked.connect(lambda: self._enter_show(True))
         row3.addWidget(rehearse_btn)
         row3.addWidget(show_btn)
@@ -271,6 +281,20 @@ class EditWindow(QMainWindow):
         self._update_buttons()
         if play_folder is not None and play_folder.latest_version() is None:
             self.save_state.force_unsaved = True
+
+    def set_entry_busy(self, busy, rehearsal=False):
+        self.show_btn.setEnabled(not busy)
+        self.rehearse_btn.setEnabled(not busy)
+        self.show_btn.setText("PLEASE WAIT..." if busy and not rehearsal else "ENTER SHOW MODE")
+        self.rehearse_btn.setText("PLEASE WAIT..." if busy and rehearsal else "REHEARSE")
+        # Override the normal green action styling while the action is unavailable.
+        self.show_btn.setStyleSheet(
+            "font-weight: bold; padding: 10px 24px; background: "
+            + ("#454b54; color: #c9ced6;" if busy else "#2e7d32; color: white;"))
+        if busy:
+            self.entry_progress.begin(len(self.cue_set.cues), rehearsal)
+        else:
+            self.entry_progress.finish()
 
     def _refresh_profile(self):
         p = self.cue_set.profile
@@ -318,6 +342,7 @@ class EditWindow(QMainWindow):
 
     def _refresh_test(self) -> None:
         """Drive TEST progress/meter from the actual audition voice."""
+        self.audio_health.refresh(idle=not bool(self.audio.active_instances()))
         if self._test_instance is None:
             return
         voice = self.audio.voice_for(self._test_instance)

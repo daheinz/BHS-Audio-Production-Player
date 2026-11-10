@@ -29,7 +29,7 @@ A cue may have multiple playing instances while also being armed again. The row 
 
 Each orange card shows the cue ID/name, playback number, PLAYING/FADING/LOOPING state, position/duration/remaining time where applicable, a compact position bar, and that cue's bus names plus the current primary/backup route indication. Different cue bus assignments remain distinct. The display does not add routing capabilities to the backend.
 
-The square icon stops only that playback. The descending-line icon fades only that playback using its configured fade-out duration; zero stops immediately. Hover tooltips are **Stop this playback** and **Fade out this playback**. The armed card has neither control.
+The square icon stops only that playback immediately and runs its normal Next Cue Action. The descending-line icon fades only that playback using its configured fade-out duration; zero stops immediately. Hover tooltips are **Stop this playback** and **Fade out this playback**. The armed card has neither control.
 
 There are no per-playback audio level meters. Position bars indicate time, not signal level. Master/bus stereo meters are at the bottom right, with L/R dBFS readings and locked-level labels. Graphical meters remain 144 logical pixels wide (approximately 1.5 inches at standard scaling). Unsupported/combined-backup meter paths report unavailable rather than fabricated levels. Meters do not confirm sound at the speakers.
 
@@ -50,13 +50,13 @@ GO can execute while other sounds are playing. **Add to Play Stack** preserves o
 
 ## Completion and readiness
 
-**Arm Next at End** arms the next cue after natural completion and waits for GO. **GO on End** arms the next cue immediately and automatically executes that same armed cue when the source finishes naturally, on a subsequent UI update. Each source PLAY cue must opt in to continue a chain. **Arm Next Now** advances immediately when triggered. Stops, manual navigation/arming, output interruption, and mode exit cancel queued automatic continuation. Loops require Arm Next Now. Existing cue files load with the same stored action choices; GO on End now arms its successor during playback. No cue-set format change is required.
+**Arm Next at End** arms the next cue after natural completion and waits for GO. **GO on End** arms the next cue immediately and automatically executes that same armed cue when the source finishes naturally, on a subsequent UI update. Each source PLAY cue must opt in to continue a chain. **Arm Next Now** advances immediately when triggered. STOP ALL, configured interrupting fades, manual navigation/arming, output interruption, and mode exit cancel queued automatic continuation. A Playing card Stop completes normally and honors Next Cue Action. Loops require Arm Next Now. Existing cue files load with the same stored action choices; GO on End now arms its successor during playback. No cue-set format change is required.
 
 Readiness, device, board confirmation, and backup warnings remain visible at the bottom left. Unconfirmed outputs are not labeled confirmed. Deliberate route switching retains its existing confirmation and interruption behavior. Leaving Show/Rehearse stops all voices and disarms; the prepared stream can remain open pumping silence between modes.
 
 ## Verification
 
-Run `python -m pytest -p no:cacheprovider` and `python tools/render_gui.py`. The current suite has 347 passing tests. Offline renders include `output/gui-review/playing-stack.png` (1500 by 920) and `playing-stack-small.png` (1000 by 700), plus Rehearse and unchanged Edit screens. These are silent/offscreen checks, not physical audibility or performance-reliability verification.
+Run `python -m pytest -p no:cacheprovider` and `python tools/render_gui.py`. The current suite has 360 passing tests. Offline renders include `output/gui-review/playing-stack.png` (1500 by 920) and `playing-stack-small.png` (1000 by 700), plus Rehearse and unchanged Edit screens. These are silent/offscreen checks, not physical audibility or performance-reliability verification.
 
 
 The **Next Cue Action** column (formerly Advance Mode) uses **Arm Next Now**, **Arm Next at End**, and **GO on End**. Stored values remain compatible. GO on End now visibly arms its successor during playback, then executes that armed cue at completion.
@@ -103,3 +103,12 @@ Show/Rehearse cue columns now use compact widths, hide Audio File, and label the
 The player now retains successful validation, metadata, and playback-ready PCM in a bounded local cache across launches. Import checks prepare reusable PCM; identical audio under different names can share it. One upcoming cue preloads ahead, RAM reuse is LRU, and repetitive UI file-identity polling is throttled. GO still checks current identity and retains all safety protections. Uncached legacy/changed clips or disk-evicted entries can still need initial decoding.
 
 Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordered by last successful open, not last save. Diagnostics logs record decoded-cache hits and preparation elapsed time. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md) for cache location/limits, first-use behavior, and measured offline timings.
+
+
+Mode entry now visibly disables both mode buttons during readiness checks. A progress panel directly above them identifies the current cue, completed/total cue count, and an approximate seconds-remaining countdown. The estimate starts at 0.25 seconds per cue (minimum one second), then adapts to observed progress; slow checks explicitly say they are taking longer. It is an estimate, not a fixed unlock delay. The requested mode opens automatically after successful checks and any required confirmation/save. Errors or edits during checking restore the controls for retry.
+
+
+Each Playing card also has a **2s fade-and-complete** icon beside Stop and the configured Fade control. It fades only that playback over two seconds (or ends at its earlier natural end), including repeating playback, then reports normal completion. The saved Next Cue Action applies: GO on End automatically starts the armed cue; Arm Next at End arms the successor; Arm Next Now keeps its already armed cue. Saved level, repeat and fade settings are unchanged. Repeated presses cannot extend this fade. The card Stop button completes normally immediately and honors Next Cue Action; STOP ALL cancels automatic continuation. The existing configured fade remains an interrupted ending.
+
+
+Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.

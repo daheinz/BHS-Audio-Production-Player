@@ -28,6 +28,10 @@ class AudioTestDialog(QDialog):
         root.addWidget(self.status)
         self.meter = QLabel("Meter unavailable until the selected output is prepared.")
         root.addWidget(self.meter)
+        from .audio_health import AudioHealthPanel
+        self.audio_health = AudioHealthPanel(self, session.backend, getattr(session, "preview", False))
+        root.addWidget(self.audio_health)
+        self.audio_health.refresh(idle=not bool(session.audio.active_instances()))
         root.addStretch()
         row = QHBoxLayout()
         self.play = QPushButton("Play Again")
@@ -86,6 +90,7 @@ class AudioTestDialog(QDialog):
         self.next_path()
 
     def refresh_meter(self):
+        self.audio_health.refresh(idle=not bool(self.session.audio.active_instances()))
         if self.session.audio.ready and self.session.backend.stream and self.session.backend.stream.running:
             m = self.session.audio.mixer.last_meter
             self.meter.setText(f"Actual output · L {m.left_db:.1f} dBFS   R {m.right_db:.1f} dBFS")

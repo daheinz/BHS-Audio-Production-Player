@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 class Result(QObject):
     done = Signal(object, str)
+    progress = Signal(int, int, str)
 
 
 class FileTask(QRunnable):

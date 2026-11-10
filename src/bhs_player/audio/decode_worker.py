@@ -76,6 +76,7 @@ def main():
                 if expected > limit:
                     raise ValueError("Decoded audio exceeds the 128 MiB safety limit; use a shorter clip or a clean, shorter export.")
                 sound.seek(start)
+                peak, full_scale_samples = 0.0, 0
                 remaining, count = end-start, 0
                 chunks = []
                 buckets = request.get("buckets", 1600)
@@ -95,6 +96,9 @@ def main():
                         raise ValueError("Decoder ended before the declared audio length; file may be truncated.")
                     if not np.isfinite(block).all():
                         raise ValueError("Decoder returned invalid audio samples.")
+                    absolute = np.abs(block)
+                    peak = max(peak, float(absolute.max()))
+                    full_scale_samples += int(np.count_nonzero(absolute >= 0.9999))
                     if mode in ("decode","validate"):
                         chunks.append(block)
                     elif mode == "waveform":
@@ -104,6 +108,8 @@ def main():
                             np.maximum.at(high[:,channel],indices,block[:,channel])
                     count += len(block)
                     remaining -= len(block)
+                result["sample_peak"] = peak
+                result["full_scale_samples"] = full_scale_samples
                 if mode in ("decode","validate"):
                     pcm = np.concatenate(chunks, axis=0)
                     chunks.clear()

@@ -41,7 +41,7 @@ The real `36 benny hill.mp3` was rejected by the import decoded-size check in ap
 
 ## Verification
 
-The full suite has 347 passing tests. Twenty focused safety cases cover isolated decode/resampling/waveforms, killed timeouts, native error output, unexpected exits, memory/cache limits, transactional import rejection/source changes, responsive UI, duplicate preparation suppression, queued automatic GO, safe Stop Previous failure, file replacement, pending/canceled import handling, canceled TEST, asynchronous mode entry, and absence of file preparation in the live audio callback. Existing placeholder-byte import fixtures now use real WAV assets. Physical audibility and device reliability remain separate verification.
+The full suite has 360 passing tests. Twenty focused safety cases cover isolated decode/resampling/waveforms, killed timeouts, native error output, unexpected exits, memory/cache limits, transactional import rejection/source changes, responsive UI, duplicate preparation suppression, queued automatic GO, safe Stop Previous failure, file replacement, pending/canceled import handling, canceled TEST, asynchronous mode entry, and absence of file preparation in the live audio callback. Existing placeholder-byte import fixtures now use real WAV assets. Physical audibility and device reliability remain separate verification.
 
 
 Implementation reference: Windows isolation uses [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects), including the documented process-memory and kill-on-job-close flags.
@@ -64,3 +64,10 @@ Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordere
 ### Small MP3 end-length discrepancies
 
 A clean MP3 decoder EOF up to 0.25 seconds before the reported end is accepted at the physical file end and logged as `AUDIO LENGTH ADJUSTMENT`. Playback uses the samples actually decoded. Reported duration remains available for compatibility with existing saved trim endpoints. Explicit earlier trim endpoints, empty audio, larger shortfalls, native decoder warnings, timeouts, and memory limits retain their protections. This fixes cue 41 being armed but blocked from GO after cue 39; restart the application to clear previously cached preparation failures.
+
+
+Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
+
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+
+The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.

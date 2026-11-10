@@ -1,6 +1,7 @@
 """Live instance controls must affect real PCM and never saved cue settings."""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
 import numpy as np
 from PySide6.QtCore import Qt
 from bhs_player.audio.engine import AudioEngine, Mixer
@@ -107,3 +108,54 @@ def test_card_defaults_live_changes_and_replay_reset_without_saving(qtbot):
     # No live level/repeat overrides enter a save.
     assert serialize_cue_set(cs) == before
     win.close()
+
+
+@pytest.mark.parametrize("mode",list(AdvanceMode))
+def test_two_second_finish_uses_normal_end_action(mode):
+    from bhs_player.cues.model import CueExecutionState
+    cue=Cue("1.0",advance_mode=mode)
+    target=Cue("2.0")
+    audio=AudioEngine(Mixer(sample_rate=100))
+    start=audio.start
+    audio.start=lambda c:start(c,pcm=np.ones((1000,2),dtype=np.float32),sample_rate=100)
+    engine=CueEngine(CueSet("Finish",[cue,target]),audio)
+    assert engine.go().ok
+    instance=audio.active_instances()[0]
+    assert audio.finish_instance(instance)
+    assert not audio.finish_instance(instance)  # Repeated clicks cannot extend the fade.
+    block=audio.mixer.render_block(199)
+    assert block[0,0]>block[-1,0]>0
+    assert not instance.completed_naturally
+    audio.mixer.render_block(1)
+    assert instance.completed_naturally
+    assert cue.execution_state is CueExecutionState.COMPLETE
+    assert engine.armed_cue is target
+    result=engine.process_pending_auto_go()
+    if mode is AdvanceMode.ON_COMPLETE_GO:
+        assert result.ok
+        assert len(audio.active_instances())==1
+    else:
+        assert result is None
+        assert not audio.active_instances()
+
+
+def test_finish_loop_only_affects_selected_playback_and_stop_cancels_it(qtbot):
+    from bhs_player.ui.main_window import PlayingStackEntry
+    cue=Cue("1.0",loop=True,advance_mode=AdvanceMode.ON_GO)
+    audio=AudioEngine(Mixer(sample_rate=100))
+    pcm=np.ones((30,2),dtype=np.float32)*.1
+    first=audio.start(cue,pcm=pcm,sample_rate=100)
+    other=audio.start(cue,pcm=pcm,sample_rate=100)
+    card=PlayingStackEntry(first,audio.voice_for(first),audio)
+    qtbot.addWidget(card)
+    qtbot.mouseClick(card.finish_btn,Qt.LeftButton)
+    assert not card.finish_btn.isEnabled()
+    audio.mixer.render_block(200)
+    assert first.completed_naturally
+    assert audio.voice_for(other).active
+    assert cue.loop and cue.fade_out==0
+    assert audio.finish_instance(other)
+    audio.stop_instance(other)
+    audio.mixer.render_block(201)
+    assert not other.completed_naturally
+    assert not audio.active_instances()

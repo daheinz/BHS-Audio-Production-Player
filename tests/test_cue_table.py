@@ -121,7 +121,7 @@ def test_dropdown_defaults_and_nearest_target(qapp):
     table = CueTable(CueSet('Show', [first, nearest, stop, empty]), editable=True)
     assert stop.target_internal_id == nearest.internal_id
     assert table.cellWidget(2, 11).currentData() == nearest.internal_id
-    assert not table.cellWidget(2, 5).isEnabled()
+    assert table.cellWidget(2, 5).isEnabled()
     assert empty.advance_mode is AdvanceMode.ON_COMPLETE
     assert empty.on_go_behavior is OnGoBehavior.ADD_TO_STACK
     table.cellWidget(3, 2).setCurrentIndex(2)  # Fade

@@ -89,8 +89,10 @@ class PlayingStackEntry(QWidget):
         bottom.addWidget(self.progress, 1)
         self.stop_btn = QPushButton()
         self.fade_btn = QPushButton()
-        for button, fade, tooltip in ((self.stop_btn, False, "Stop this playback"),
-                                      (self.fade_btn, True, "Fade out this playback")):
+        self.finish_btn = QPushButton()
+        for button, fade, tooltip in ((self.stop_btn, False, "Stop this playback and run Next Cue Action"),
+                                      (self.fade_btn, True, "Fade out this playback"),
+                                      (self.finish_btn, True, "Fade out in 2 seconds, then complete normally (runs Next Cue Action)")):
             pixmap = QPixmap(20, 20)
             pixmap.fill(Qt.transparent)
             painter = QPainter(pixmap)
@@ -99,6 +101,13 @@ class PlayingStackEntry(QWidget):
                 painter.drawLine(3, 4, 7, 4)
                 painter.drawLine(7, 4, 17, 16)
                 painter.drawLine(3, 16, 17, 16)
+                if button is self.finish_btn:
+                    painter.fillRect(0, 8, 14, 12, QColor('#683b19'))
+                    font = painter.font()
+                    font.setPixelSize(10)
+                    font.setBold(True)
+                    painter.setFont(font)
+                    painter.drawText(0, 18, "2s")
             else:
                 painter.fillRect(5, 5, 10, 10, QColor('#fff2df'))
             painter.end()
@@ -110,6 +119,7 @@ class PlayingStackEntry(QWidget):
             bottom.addWidget(button)
         self.stop_btn.clicked.connect(self._stop)
         self.fade_btn.clicked.connect(self._fade)
+        self.finish_btn.clicked.connect(self._finish)
         layout.addLayout(bottom)
         live = QHBoxLayout()
         live.setSpacing(5)
@@ -175,13 +185,20 @@ class PlayingStackEntry(QWidget):
         return status
 
     def _stop(self):
-        log.info("PLAYBACK STOP cue=%s playback=%s", self.instance.identifier, self.instance.playback_number)
-        self.audio.stop_instance(self.instance)
+        log.info("PLAYBACK STOP cue=%s playback=%s normal_completion=True", self.instance.identifier, self.instance.playback_number)
+        self.audio.stop_instance(self.instance, complete_naturally=True)
 
     def _fade(self):
         log.info("PLAYBACK FADE cue=%s playback=%s duration=%s", self.instance.identifier, self.instance.playback_number, self.voice.fade_out_duration)
         # configured fade-out duration; zero means immediate stop (Section 5)
         self.audio.fade_instance(self.instance, self.voice.fade_out_duration)
+
+    def _finish(self):
+        if self.audio.finish_instance(self.instance):
+            log.info("PLAYBACK FADE COMPLETE cue=%s playback=%s duration=2 normal_completion=True",
+                     self.instance.identifier, self.instance.playback_number)
+            self.finish_btn.setEnabled(False)
+            self.refresh()
 
     def refresh(self):
         v = self.voice
@@ -576,13 +593,13 @@ class MainWindow(QMainWindow):
                 target = self.cue_set.by_internal_id(armed.target_internal_id)
                 target_name = f"{target.identifier} {target.name}" if target else '(no target)'
                 duration = f" over {armed.fade_duration:g}s" if armed.action is ActionType.FADE else ''
-                self.armed_detail.setText(f"GO → {armed.action.value} {target_name}{duration}")
+                self.armed_detail.setText(f"GO → {armed.action.value} {target_name}{duration} · {armed.advance_mode.label}")
             else:
                 self.armed_detail.setText("GO → STOP ALL sounds")
         elif self.engine.waiting_cue:
             waiting = self.engine.waiting_cue
             next_cue = self.cue_set.next_after(waiting.internal_id)
-            automatic = waiting.is_play_sound() and waiting.advance_mode is AdvanceMode.ON_COMPLETE_GO
+            automatic = waiting.advance_mode is AdvanceMode.ON_COMPLETE_GO
             state = 'automatic' if automatic else 'waiting'
             self.armed_lbl.setText("No cue armed")
             self.armed_detail.setToolTip(f"Waiting for {waiting.identifier} {waiting.name}")

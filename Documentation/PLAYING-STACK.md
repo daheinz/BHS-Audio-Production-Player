@@ -12,7 +12,7 @@ Each card contains:
 - A compact progress bar showing playback position. This is a timing display, not a loudness meter.
 - Elapsed/remaining time, or current-loop position and total elapsed time.
 - That cue's bus names and the current primary/backup route indication.
-- Square STOP and descending-line FADE OUT icons affecting only that instance, with tooltips "Stop this playback" and "Fade out this playback". Click the card and use Ctrl+F to fade that explicitly selected/focused instance.
+- Square STOP and descending-line FADE OUT icons affecting only that instance, with tooltips "Stop this playback and run Next Cue Action" and "Fade out this playback". Click the card and use Ctrl+F to fade that explicitly selected/focused instance.
 
 Finished or stopped cards disappear. The yellow Armed Cue above the stack is the instruction GO will execute next; it can differ from all the sounds currently playing. Arming or selecting a cue does not start it.
 
@@ -41,7 +41,7 @@ Automated callback tests verify identical nonzero sample buffers across Rehearse
 
 The full-height cue list occupies the left two-thirds. The bottom strip holds status and compact GO / STOP ALL controls; it has no ARM CUE button. Space executes an enabled GO; Ctrl+Shift+S invokes the existing immediate Stop All. Stop All preserves existing handling of an independently armed cue, so do not assume it always disarms. Up/Down select table rows without arming; Enter arms them. See [Show/Rehearse guide](SHOW-MODE.md) for state colors, shortcut protection, completion choices, and readiness limitations.
 
-The renderer also writes `output/gui-review/playing-stack-small.png` at 1000 by 700 to inspect resizing. The current full suite has 347 passing tests.
+The renderer also writes `output/gui-review/playing-stack-small.png` at 1000 by 700 to inspect resizing. The current full suite has 360 passing tests.
 
 
 ## Live playback level and repeat
@@ -85,3 +85,16 @@ Show/Rehearse cue columns now use compact widths, hide Audio File, and label the
 The player now retains successful validation, metadata, and playback-ready PCM in a bounded local cache across launches. Import checks prepare reusable PCM; identical audio under different names can share it. One upcoming cue preloads ahead, RAM reuse is LRU, and repetitive UI file-identity polling is throttled. GO still checks current identity and retains all safety protections. Uncached legacy/changed clips or disk-evicted entries can still need initial decoding.
 
 Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordered by last successful open, not last save. Diagnostics logs record decoded-cache hits and preparation elapsed time. See [Performance and recent plays](PLAYBACK-PERFORMANCE.md) for cache location/limits, first-use behavior, and measured offline timings.
+
+
+Each Playing card also has a **2s fade-and-complete** icon beside Stop and the configured Fade control. It fades only that playback over two seconds (or ends at its earlier natural end), including repeating playback, then reports normal completion. The saved Next Cue Action applies: GO on End automatically starts the armed cue; Arm Next at End arms the successor; Arm Next Now keeps its already armed cue. Saved level, repeat and fade settings are unchanged. Repeated presses cannot extend this fade. The card Stop button completes normally immediately and honors Next Cue Action; STOP ALL cancels automatic continuation. The existing configured fade remains an interrupted ending.
+
+
+Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
+
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+
+The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
+
+
+Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.
