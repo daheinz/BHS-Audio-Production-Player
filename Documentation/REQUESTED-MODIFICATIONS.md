@@ -142,14 +142,14 @@ Current behavior: import validation and metadata results persist locally by file
 - Keep the 256 MiB RAM cache, 128 MiB per-clip limit, active-data budget, timeout, isolation, and corrupt-file protections. The local decoded disk cache is bounded at 512 MiB.
 - Explicit Recheck Audio bypasses validation results and refreshes preparation state. First-time uncached legacy playback or an evicted disk entry may still require decoding.
 
-See [Playback performance and recent plays](PLAYBACK-PERFORMANCE.md). Current full suite: 360 tests, including thirteen new cache/recency checks.
+See [Playback performance and recent plays](PLAYBACK-PERFORMANCE.md). Current full suite: 386 tests, including thirteen new cache/recency checks.
 
 
 ### Small MP3 end-length discrepancies
 
 A clean MP3 decoder EOF up to 0.25 seconds before the reported end is accepted at the physical file end and logged as `AUDIO LENGTH ADJUSTMENT`. Playback uses the samples actually decoded. Reported duration remains available for compatibility with existing saved trim endpoints. Explicit earlier trim endpoints, empty audio, larger shortfalls, native decoder warnings, timeouts, and memory limits retain their protections. This fixes cue 41 being armed but blocked from GO after cue 39; restart the application to clear previously cached preparation failures.
 
-Verification: all 360 tests pass. Real cue 39 to cue 41 automatic continuation also passes with offline rendering (no hardware output).
+Verification: all 386 tests pass. Real cue 39 to cue 41 automatic continuation also passes with offline rendering (no hardware output).
 
 
 Mode entry now visibly disables both mode buttons during readiness checks. A progress panel directly above them identifies the current cue, completed/total cue count, and an approximate seconds-remaining countdown. The estimate starts at 0.25 seconds per cue (minimum one second), then adapts to observed progress; slow checks explicitly say they are taking longer. It is an estimate, not a fixed unlock delay. The requested mode opens automatically after successful checks and any required confirmation/save. Errors or edits during checking restore the controls for retry.
@@ -160,11 +160,11 @@ Each Playing card also has a **2s fade-and-complete** icon beside Stop and the c
 
 Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
 
-Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. Diagnostics / Logs is consolidated into the Edit System Status panel.
 
 The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
 
-Verification: 360 automated tests pass, including silent peak/cache checks, inline and Advanced import warning display, Edit health states/output loss, and card Stop for every Next Cue Action. The Pre-Audience test dialog update also passes 33 related workflow/diagnostics tests. Edit and test dialog layouts were reviewed with offline renders; no hardware playback was used.
+Verification: 386 automated tests pass, including silent peak/cache checks, inline and Advanced import warning display, Edit health states/output loss, and card Stop for every Next Cue Action. The Pre-Audience test dialog update also passes 33 related workflow/diagnostics tests. Edit and test dialog layouts were reviewed with offline renders; no hardware playback was used.
 
 
 Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.
@@ -172,3 +172,8 @@ Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced
 Stop/Fade Next Cue Action verification: 196 related engine, editor, UI, storage, and playback checks pass, including 17 new action-specific cases. These cover all three choices, multiple fade targets, silent targets, zero fades, manual override, emergency cancellation, persisted editing, and playbacks started after a fade begins.
 
 Cue 15.1 troubleshooting: the latest Clue 26 rehearsal recovery referenced 17.0 with a 0.5-second fade. A new version corrects its target to 15.0 and duration to 5 seconds, preserving the original recovery in its backups folder. Actual-source offline verification confirms immediate fade initiation on GO, five-second completion, and arming 17.0. Target/duration/count logging and a five-second regression were added; 35 related action/mixer tests pass. Already-open application state requires the same two field edits or reopening the corrected saved version.
+
+
+Edit now uses a compact **System Status / Cue Controls / Project & Navigation** dashboard. It hides after successful Rehearsal or Show entry and restores on return. All three cue-list views include a read-only **Duration** column showing the edited Play length (one pass for loops), Fade duration, or Immediate for stops. Source metadata loads asynchronously when needed; cue files and playback behavior are unchanged. See [Edit dashboard and cue duration](EDIT-DASHBOARD.md).
+
+Completed approved Edit dashboard / hide-on-performance / shared Duration work. Full suite: 386 passing tests; source compilation and desktop/narrow visual review pass. Eight new checks cover derived read-only duration, asynchronous source lengths, both mode hide/restore paths, responsive panels, unique commands, and selection boundaries.

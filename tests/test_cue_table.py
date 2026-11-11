@@ -17,7 +17,7 @@ def qapp():
 def test_inline_fields_and_validation(qapp):
     cue = Cue('12.10')
     table = CueTable(CueSet('Show', [cue]), editable=True)
-    assert table.columnCount() == len(HEADERS) == 16
+    assert table.columnCount() == len(HEADERS) == 17
     assert isinstance(table.cellWidget(0, 2), QComboBox)
     table.item(0, 7).setText('65%')
     assert cue.volume == .65

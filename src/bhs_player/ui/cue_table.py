@@ -22,10 +22,10 @@ from .background import FileTask
 
 FIELDS = ('identifier', 'name', 'action', 'audio_file', 'notes', 'advance_mode',
           'on_go_behavior', 'volume', 'loop', 'start_position', 'end_position',
-          'target_internal_id', 'fade_duration', 'fade_in', 'fade_out', 'bus_ids')
+          'target_internal_id', 'fade_duration', 'fade_in', 'fade_out', 'bus_ids', 'duration')
 HEADERS = ('Cue ID', 'Cue Name', 'Action', 'Audio File', 'Notes', 'Next Cue Action',
            'On Go', 'Volume\nPercent', 'Loop', 'Start\nPosition', 'End\nPosition',
-           'Target\nPlay Cue', 'Fade\nDuration', 'Fade-In', 'Fade-Out', 'Output Bus')
+           'Target\nPlay Cue', 'Fade\nDuration', 'Fade-In', 'Fade-Out', 'Output Bus', 'Duration')
 ORDER_WARNING_ROLE = int(Qt.UserRole) + 8
 
 OPTIONS = {
@@ -37,6 +37,7 @@ OPTIONS = {
                        ('Stop All and Add', OnGoBehavior.STOP_ALL)],
 }
 FIELD_HELP = {
+    'duration': 'Edited playable duration: End minus Start. Fades do not add time. Loops show one pass; Fade actions show their duration; Stop actions are immediate. Read-only.',
     'bus_ids': 'Choose one output bus here. Use Advanced Cue Editor for multiple buses.',
     'identifier': 'Script-page cue ID, stored as text: page.subcue (e.g. 12.10). IDs are exact text: 12.1 and 12.10 are distinct.',
     'name': 'Human-readable cue name displayed in the cue table and the armed cue display.',
@@ -104,6 +105,8 @@ class CueTable(QTableWidget):
         self._rebuilding = False
         self.settings = settings if settings is not None else application_settings()
         self._audio_imports = {}
+        self._duration_sources = {}
+        self._duration_jobs = {}
         self.defer_audio = defer_audio
         if editable:
             self._initialize_defaults()
@@ -142,7 +145,9 @@ class CueTable(QTableWidget):
         for col, width in enumerate((70, 170, 95, 230, 300, 150, 170, 85, 55, 95, 95, 150, 95, 85, 85)):
             self.setColumnWidth(col, width)
         self.setColumnWidth(FIELDS.index("bus_ids"), 160)
-        self.horizontalHeader().moveSection(FIELDS.index("bus_ids"), 3)
+        self.setColumnWidth(FIELDS.index("duration"), 105)
+        self.horizontalHeader().moveSection(FIELDS.index("duration"), 2)
+        self.horizontalHeader().moveSection(self.horizontalHeader().visualIndex(FIELDS.index("bus_ids")), 4)
         for field in ('start_position', 'end_position', 'fade_duration', 'fade_in', 'fade_out'):
             self.setColumnHidden(FIELDS.index(field), True)
         if armable:
@@ -290,6 +295,64 @@ class CueTable(QTableWidget):
         self.settings.setValue(self._width_key(FIELDS[col]), width)
         self.settings.sync()
 
+    def _duration_text(self, cue):
+        if cue.action in (ActionType.STOP, ActionType.STOP_ALL):
+            return "Immediate"
+        if cue.action is ActionType.FADE:
+            return f"{cue.fade_duration:.3f}s"
+        end = cue.end_position
+        if end is None:
+            preview = getattr(cue, "_preview_waveform", None)
+            if preview is not None:
+                end = preview.duration
+            elif not cue.audio_file:
+                return "Unassigned"
+            else:
+                path = Path(cue.audio_file)
+                if self.play_folder and not path.is_absolute():
+                    path = self.play_folder.folder / path
+                key = str(path.absolute())
+                if key not in self._duration_sources:
+                    self._request_duration(key)
+                    return "Checking..."
+                end = self._duration_sources[key]
+                if end is None:
+                    return "Unavailable"
+        duration = end - (cue.start_position or 0)
+        if duration <= 0:
+            return "Invalid trim"
+        return f"{duration:.3f}s" + (" / loop" if cue.loop else "")
+
+    def _request_duration(self, path):
+        if path in self._duration_jobs:
+            return
+        from ..audio.safe_decode import inspect_audio
+        def check():
+            try:
+                return path, inspect_audio(path)["duration"]
+            except Exception:
+                return path, None
+        task = FileTask(check)
+        self._duration_jobs[path] = task
+        task.signals.done.connect(self._duration_checked)
+        QThreadPool.globalInstance().start(task)
+
+    @Slot(object, str)
+    def _duration_checked(self, result, error):
+        if error or result is None:
+            return
+        path, duration = result
+        self._duration_jobs.pop(path, None)
+        self._duration_sources[path] = duration
+        blocked = self.blockSignals(True)
+        for row, cue in enumerate(self.cue_set.cues):
+            item = self.item(row, FIELDS.index("duration"))
+            if item is not None:
+                text = self._duration_text(cue)
+                item.setText(text)
+                item.setToolTip("Duration: " + text + "\n" + FIELD_HELP["duration"])
+        self.blockSignals(blocked)
+
     def _sound_duration(self, audio_file):
         path = Path(audio_file)
         if self.play_folder is not None and not path.is_absolute():
@@ -300,7 +363,7 @@ class CueTable(QTableWidget):
         return duration
 
     def applicable(self, cue, field):
-        if field in ('identifier', 'name', 'action', 'notes'):
+        if field in ('identifier', 'name', 'action', 'notes', 'duration'):
             return True
         if field == 'advance_mode':
             return cue.action in (ActionType.PLAY, ActionType.STOP, ActionType.FADE)
@@ -422,7 +485,7 @@ class CueTable(QTableWidget):
         self.setRowCount(len(self.cue_set.cues))
         for row, cue in enumerate(self.cue_set.cues):
             for col, field in enumerate(FIELDS):
-                value = getattr(cue, field)
+                value = self._duration_text(cue) if field == "duration" else getattr(cue, field)
                 enabled = self.applicable(cue, field)
                 choices = self.options(cue, field) if field in OPTIONS or field in ('target_internal_id', 'bus_ids') else None
                 text = str(value or '')
@@ -438,7 +501,7 @@ class CueTable(QTableWidget):
                 context = f'{label}: {display}' if enabled else f'{label}: not used for {cue.action.value} cues'
                 item.setToolTip(f'{context}\n{FIELD_HELP[field]}')
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if self.editable and enabled and not choices and field != 'loop':
+                if self.editable and enabled and not choices and field not in ('loop', 'duration'):
                     flags |= Qt.ItemIsEditable
                 if field == 'loop' and enabled:
                     flags |= Qt.ItemIsUserCheckable if self.editable else Qt.NoItemFlags
@@ -476,7 +539,7 @@ class CueTable(QTableWidget):
         self.commit(item.row(), field, value)
 
     def commit(self, row, field, value, prevalidated=False):
-        if self._rebuilding or not self.editable:
+        if self._rebuilding or not self.editable or field == "duration":
             return False
         cue = self.cue_set.cues[row]
         duration_warning = None

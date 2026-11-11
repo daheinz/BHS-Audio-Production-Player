@@ -41,7 +41,7 @@ Automated callback tests verify identical nonzero sample buffers across Rehearse
 
 The full-height cue list occupies the left two-thirds. The bottom strip holds status and compact GO / STOP ALL controls; it has no ARM CUE button. Space executes an enabled GO; Ctrl+Shift+S invokes the existing immediate Stop All. Stop All preserves existing handling of an independently armed cue, so do not assume it always disarms. Up/Down select table rows without arming; Enter arms them. See [Show/Rehearse guide](SHOW-MODE.md) for state colors, shortcut protection, completion choices, and readiness limitations.
 
-The renderer also writes `output/gui-review/playing-stack-small.png` at 1000 by 700 to inspect resizing. The current full suite has 360 passing tests.
+The renderer also writes `output/gui-review/playing-stack-small.png` at 1000 by 700 to inspect resizing. The current full suite has 386 passing tests.
 
 
 ## Live playback level and repeat
@@ -92,9 +92,12 @@ Each Playing card also has a **2s fade-and-complete** icon beside Stop and the c
 
 Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
 
-Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. Diagnostics / Logs is consolidated into the Edit System Status panel.
 
 The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
 
 
 Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.
+
+
+Edit now uses a compact **System Status / Cue Controls / Project & Navigation** dashboard. It hides after successful Rehearsal or Show entry and restores on return. All three cue-list views include a read-only **Duration** column showing the edited Play length (one pass for loops), Fade duration, or Immediate for stops. Source metadata loads asynchronously when needed; cue files and playback behavior are unchanged. See [Edit dashboard and cue duration](EDIT-DASHBOARD.md).

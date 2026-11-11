@@ -56,7 +56,7 @@ Readiness, device, board confirmation, and backup warnings remain visible at the
 
 ## Verification
 
-Run `python -m pytest -p no:cacheprovider` and `python tools/render_gui.py`. The current suite has 360 passing tests. Offline renders include `output/gui-review/playing-stack.png` (1500 by 920) and `playing-stack-small.png` (1000 by 700), plus Rehearse and unchanged Edit screens. These are silent/offscreen checks, not physical audibility or performance-reliability verification.
+Run `python -m pytest -p no:cacheprovider` and `python tools/render_gui.py`. The current suite has 386 passing tests. Offline renders include `output/gui-review/playing-stack.png` (1500 by 920) and `playing-stack-small.png` (1000 by 700), plus Rehearse and unchanged Edit screens. These are silent/offscreen checks, not physical audibility or performance-reliability verification.
 
 
 The **Next Cue Action** column (formerly Advance Mode) uses **Arm Next Now**, **Arm Next at End**, and **GO on End**. Stored values remain compatible. GO on End now visibly arms its successor during playback, then executes that armed cue at completion.
@@ -112,3 +112,6 @@ Each Playing card also has a **2s fade-and-complete** icon beside Stop and the c
 
 
 Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.
+
+
+Edit now uses a compact **System Status / Cue Controls / Project & Navigation** dashboard. It hides after successful Rehearsal or Show entry and restores on return. All three cue-list views include a read-only **Duration** column showing the edited Play length (one pass for loops), Fade duration, or Immediate for stops. Source metadata loads asynchronously when needed; cue files and playback behavior are unchanged. See [Edit dashboard and cue duration](EDIT-DASHBOARD.md).

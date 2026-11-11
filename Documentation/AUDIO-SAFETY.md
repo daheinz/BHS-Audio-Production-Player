@@ -41,7 +41,7 @@ The real `36 benny hill.mp3` was rejected by the import decoded-size check in ap
 
 ## Verification
 
-The full suite has 360 passing tests. Twenty focused safety cases cover isolated decode/resampling/waveforms, killed timeouts, native error output, unexpected exits, memory/cache limits, transactional import rejection/source changes, responsive UI, duplicate preparation suppression, queued automatic GO, safe Stop Previous failure, file replacement, pending/canceled import handling, canceled TEST, asynchronous mode entry, and absence of file preparation in the live audio callback. Existing placeholder-byte import fixtures now use real WAV assets. Physical audibility and device reliability remain separate verification.
+The full suite has 386 passing tests. Twenty focused safety cases cover isolated decode/resampling/waveforms, killed timeouts, native error output, unexpected exits, memory/cache limits, transactional import rejection/source changes, responsive UI, duplicate preparation suppression, queued automatic GO, safe Stop Previous failure, file replacement, pending/canceled import handling, canceled TEST, asynchronous mode entry, and absence of file preparation in the live audio callback. Existing placeholder-byte import fixtures now use real WAV assets. Physical audibility and device reliability remain separate verification.
 
 
 Implementation reference: Windows isolation uses [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects), including the documented process-memory and kill-on-job-close flags.

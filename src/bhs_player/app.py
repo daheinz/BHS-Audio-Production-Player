@@ -167,6 +167,7 @@ class ProductionController(QObject):
         win.returnedToEdit.connect(self.return_to_edit)
         self.edit.setEnabled(False)
         win.show()
+        self.edit.hide()
 
     @Slot(int, int, str)
     def _entry_progress(self, done, total, detail):

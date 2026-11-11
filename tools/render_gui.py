@@ -35,6 +35,11 @@ def capture(widget, name):
     widget.hide()
 
 capture(controller.edit, "edit")
+controller.edit.resize(1920, 1080)
+capture(controller.edit, "edit-1080p")
+controller.edit.resize(1000, 760)
+capture(controller.edit, "edit-small")
+controller.edit.resize(1500, 860)
 controller.edit.set_entry_busy(True)
 controller.edit.entry_progress.update_progress(1,4,"Checking cue 12.1")
 capture(controller.edit,"mode-entry-waiting")

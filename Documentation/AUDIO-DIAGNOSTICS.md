@@ -49,7 +49,7 @@ Note the cue and approximate time of the problem. Look at Audio Health and the m
 
 ## Verification
 
-The automated suite covers callback counters without callback logging, unchanged PCM on underflow, separate clipping/load classification, warning hold time, device telemetry availability, loss reporting, deduplicated control-thread issue logs, rotation, listener-thread writes, logging failure, and nonmodal viewer/report/folder access. Full suite: 360 passing tests. Offline renders include `audio-health-example.png` (explicitly simulated states), `diagnostics-logs.png`, and updated Show/Rehearse layouts. Physical device reliability and audibility remain unverified.
+The automated suite covers callback counters without callback logging, unchanged PCM on underflow, separate clipping/load classification, warning hold time, device telemetry availability, loss reporting, deduplicated control-thread issue logs, rotation, listener-thread writes, logging failure, and nonmodal viewer/report/folder access. Full suite: 386 passing tests. Offline renders include `audio-health-example.png` (explicitly simulated states), `diagnostics-logs.png`, and updated Show/Rehearse layouts. Physical device reliability and audibility remain unverified.
 
 
 ## Decoder and import safety
@@ -68,10 +68,13 @@ Use **Recheck Audio** in Edit for an explicit full scan. Open Play is now ordere
 
 Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
 
-Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. Diagnostics / Logs is consolidated into the Edit System Status panel.
 
 The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
 
 The Pre-Audience Audio Test dialog also includes the same live Audio Health panel, so diagnostics remain visible while that dialog is open.
 
 Stop/Fade execution logs now include `ACTION TARGET` with action cue, resolved target identifier/name, requested duration, matched active playback count, and Next Cue Action. A valid but silent target logs `ACTION NO AUDIO EFFECT`, distinguishing a configuration/no-op issue from a failed fade.
+
+
+Edit now uses a compact **System Status / Cue Controls / Project & Navigation** dashboard. It hides after successful Rehearsal or Show entry and restores on return. All three cue-list views include a read-only **Duration** column showing the edited Play length (one pass for loops), Fade duration, or Immediate for stops. Source metadata loads asynchronously when needed; cue files and playback behavior are unchanged. See [Edit dashboard and cue duration](EDIT-DASHBOARD.md).

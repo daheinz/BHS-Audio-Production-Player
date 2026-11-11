@@ -146,9 +146,6 @@ class EditWindow(QMainWindow):
         root.addWidget(heading)
         viewing_row = QHBoxLayout()
         viewing_row.addWidget(ViewingModeControl(self))
-        logs_button = QPushButton("Diagnostics / Logs")
-        logs_button.clicked.connect(lambda: show_diagnostics(self, self.routing.backend if self.routing else None))
-        viewing_row.addWidget(logs_button)
         viewing_row.addStretch(1)
         root.addLayout(viewing_row)
         profile_row = QHBoxLayout()
@@ -159,21 +156,19 @@ class EditWindow(QMainWindow):
         profile_btn.clicked.connect(self._profile)
         tester_btn = QPushButton("Pre-Audience Audio Test...")
         tester_btn.clicked.connect(self._audio_test)
-        readiness_btn = QPushButton("Show Readiness...")
-        readiness_btn.clicked.connect(self._validate_show)
         recheck_btn = QPushButton("Recheck Audio")
         recheck_btn.setToolTip("Force full validation of production audio, bypassing cached validation results.")
         recheck_btn.clicked.connect(self._recheck_audio)
-        for btn in (profile_btn, tester_btn, readiness_btn, recheck_btn):
+        for btn in (profile_btn, tester_btn, recheck_btn):
             profile_row.addWidget(btn)
         root.addLayout(profile_row)
         self.routing_notice = QLabel("")
         self.routing_notice.setWordWrap(True)
-        root.addWidget(self.routing_notice)
         self._refresh_profile()
 
         self.list = CueTable(cue_set, editable=True, play_folder=play_folder, defer_audio=bool(getattr(audio, "nonblocking", False)))
         self.cue_table = self.list
+        self.list.setMinimumHeight(140)
         self.list.cueChanged.connect(self._mark_edited)
         self.list.audioTestRequested.connect(self._audition)
         self.list.editRejected.connect(lambda message: self.status_lbl.setText(message))
@@ -185,6 +180,7 @@ class EditWindow(QMainWindow):
         from .clip_editor import ClipEditor
         self.clip_editor = ClipEditor(self)
         self.clip_editor.setMaximumHeight(260)
+        self.clip_editor.plot.setMinimumHeight(100)
         self.clip_editor.edited.connect(self._apply_clip)
         self.list.currentRowChanged.connect(lambda _: self._sync_clip())
         self.list.cueChanged.connect(self._sync_clip)
@@ -195,81 +191,9 @@ class EditWindow(QMainWindow):
 
         root.addWidget(QLabel("Drag left-edge handles to reorder. Amber Cue IDs mark numeric reversals. Double-click cells to edit."))
 
-        # cue actions
-        row1 = QHBoxLayout()
-        add_btn = QPushButton("Add Cue")
-        add_btn.clicked.connect(self._add_cue)
-        del_btn = QPushButton("Remove Cue")
-        del_btn.clicked.connect(self._remove_cue)
-        up_btn = QPushButton("Move Up")
-        up_btn.clicked.connect(lambda: self._move(-1))
-        down_btn = QPushButton("Move Down")
-        down_btn.clicked.connect(lambda: self._move(1))
-        for b in (add_btn, del_btn, up_btn, down_btn):
-            row1.addWidget(b)
-        validate_btn = QPushButton("Validate Show")
-        validate_btn.clicked.connect(self._validate_show)
-        row1.addWidget(validate_btn)
-        import_btn = QPushButton("Browse / Import Audio")
-        import_btn.clicked.connect(self._browse_audio)
-        row1.addWidget(import_btn)
-        advanced = QPushButton("Advanced Cue Editor…")
-        advanced.clicked.connect(self._advanced)
-        row1.addWidget(advanced)
-        root.addLayout(row1)
-        self.del_btn, self.up_btn, self.down_btn = del_btn, up_btn, down_btn
-
-        # audition / TEST (Section 13) with progress + meter
-        row2 = QHBoxLayout()
-        self.test_btn = QPushButton("TEST Selected Cue")
-        self.test_btn.clicked.connect(self._audition)
-        self.stop_test_btn = QPushButton("Stop TEST")
-        self.stop_test_btn.clicked.connect(self._stop_audition)
-        self.test_lbl = QLabel("")
-        self.test_lbl.setProperty("tone", "warning")
-        self.test_lbl.setStyleSheet("font-weight: bold")
-        for w in (self.test_btn, self.stop_test_btn, self.test_lbl):
-            row2.addWidget(w)
-        row2.addStretch(1)
-        root.addLayout(row2)
-
-        # TEST progress + meter row (Sections 8, 13)
-        from .widgets import LevelMeter, ProgressBar
-        test_row = QHBoxLayout()
-        self.test_progress = ProgressBar()
-        self.test_progress.setVisible(False)
-        test_row.addWidget(self.test_progress, 2)
-        self.test_meter = LevelMeter()
-        self.test_meter.setVisible(False)
-        test_row.addWidget(self.test_meter, 1)
-        from .audio_health import AudioHealthPanel
-        self.audio_health = AudioHealthPanel(self, getattr(self.routing, "backend", None),
-                                            preview=bool(self.routing and getattr(self.routing, "preview", False)))
-        test_row.addWidget(self.audio_health)
-        self.audio_health.refresh(idle=True)
-        root.addLayout(test_row)
-
-        # save + enter show
-        row3 = QHBoxLayout()
-        self.status_lbl = QLabel("")
-        self.status_lbl.setProperty("tone", "success")
-        row3.addWidget(self.status_lbl, 1)
-        save_btn = QPushButton("Save Version")
-        save_btn.setStyleSheet("font-weight: bold; padding: 8px 20px;")
-        save_btn.clicked.connect(self._save)
-        row3.addWidget(save_btn)
-        from .mode_entry import ModeEntryProgress
-        self.entry_progress = ModeEntryProgress(self)
-        root.addWidget(self.entry_progress)
-        show_btn = self.show_btn = QPushButton("ENTER SHOW MODE")
-        show_btn.setStyleSheet(
-            "font-weight: bold; padding: 10px 24px; background: #2e7d32; color: white;")
-        show_btn.clicked.connect(self._enter_show)
-        rehearse_btn = self.rehearse_btn = QPushButton("REHEARSE")
-        rehearse_btn.clicked.connect(lambda: self._enter_show(True))
-        row3.addWidget(rehearse_btn)
-        row3.addWidget(show_btn)
-        root.addLayout(row3)
+        from .edit_dashboard import EditDashboard
+        self.dashboard = EditDashboard(self)
+        root.addWidget(self.dashboard)
 
         # ~25 Hz refresh for TEST progress/meters (Section 9)
         from PySide6.QtCore import QTimer
@@ -281,6 +205,14 @@ class EditWindow(QMainWindow):
         self._update_buttons()
         if play_folder is not None and play_folder.latest_version() is None:
             self.save_state.force_unsaved = True
+
+    def resizeEvent(self, event):
+        # Preserve the normal waveform height on desktop windows while allowing
+        # cue rows and controls to fit in narrower/shorter windows.
+        if hasattr(self, "clip_editor"):
+            compact = event.size().width() < 1300 or event.size().height() < 850
+            self.clip_editor.plot.setMinimumHeight(100 if compact else 170)
+        super().resizeEvent(event)
 
     def set_entry_busy(self, busy, rehearsal=False):
         self.show_btn.setEnabled(not busy)
@@ -342,7 +274,25 @@ class EditWindow(QMainWindow):
 
     def _refresh_test(self) -> None:
         """Drive TEST progress/meter from the actual audition voice."""
-        self.audio_health.refresh(idle=not bool(self.audio.active_instances()))
+        active = bool(self.audio.active_instances())
+        self.audio_health.refresh(idle=not active)
+        backend = getattr(self.routing, "backend", None)
+        preview = bool(getattr(self.routing, "preview", False))
+        lost = bool(getattr(backend, "output_lost", False))
+        state = "Preview / no audio" if preview else "Error - output not ready" if lost or not self.audio.ready else "Playing" if active else "Ready - Idle"
+        tone = "neutral" if preview else "error" if lost or not self.audio.ready else "success"
+        self.engine_state.setText(state)
+        if self.engine_state.property("tone") != tone:
+            self.engine_state.setProperty("tone", tone)
+            self.engine_state.style().unpolish(self.engine_state)
+            self.engine_state.style().polish(self.engine_state)
+        identity = getattr(backend, "selected_identity", None) or "No output selected"
+        self.device_label.setText("Output: " + identity)
+        self.device_label.setToolTip(identity)
+        self.status_lbl.setToolTip(self.status_lbl.text())
+        self.routing_notice.setToolTip(self.routing_notice.text())
+        self._update_buttons()
+        self.test_lbl.setVisible(bool(self.test_lbl.text()))
         if self._test_instance is None:
             return
         voice = self.audio.voice_for(self._test_instance)
@@ -401,9 +351,15 @@ class EditWindow(QMainWindow):
         return self.cue_set.cues[i] if 0 <= i < len(self.cue_set.cues) else None
 
     def _update_buttons(self):
-        has = self._selected_cue() is not None
-        for b in (self.del_btn, self.up_btn, self.down_btn, self.test_btn):
-            b.setEnabled(has)
+        cue = self._selected_cue()
+        row = self._selected_index()
+        self.del_btn.setEnabled(cue is not None)
+        self.up_btn.setEnabled(cue is not None and row > 0)
+        self.down_btn.setEnabled(cue is not None and row < len(self.cue_set.cues)-1)
+        self.test_btn.setEnabled(bool(cue and cue.is_play_sound() and cue.audio_file))
+        self.import_btn.setEnabled(bool(cue and cue.is_play_sound()))
+        self.advanced_btn.setEnabled(cue is not None)
+        self.stop_test_btn.setEnabled(self._test_instance is not None or bool(self.test_lbl.text()))
 
     # ---- cue operations ----------------------------------------------------
     def _browse_audio(self):

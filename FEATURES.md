@@ -25,7 +25,7 @@ Offline real-asset execution passed for the sequence, with no clipping in the te
 - Advanced Cue Editor shares the same cue data, supports multiple buses, and applies changes only after validation.
 - Cue IDs are exact text: 12.1 and 12.10 coexist and survive saving/loading. Performance order stays explicit.
 - Referenced-cue deletion is blocked. Review Linked Cues can retarget or explicitly delete linked STOP/FADE cues before removing their original target.
-- Shared Show/Rehearse view: full-height cue list on the left (roughly two-thirds), fixed yellow Armed Cue container above a separate bottom-aligned Playing Stack on the right. Resizable divider, scrolling table/stack, and compact bottom readiness, GO / STOP ALL, route controls, and locked bus meters. Edit layout unchanged.
+- Shared Show/Rehearse view: full-height cue list on the left (roughly two-thirds), fixed yellow Armed Cue container above a separate bottom-aligned Playing Stack on the right. Resizable divider, scrolling table/stack, and compact bottom readiness, GO / STOP ALL, route controls, and locked bus meters. Edit uses the compact three-panel dashboard.
 - Compact orange playback cards grow upward from the bottom, newest above oldest, with playback numbers, timing progress bars, per-cue bus/route identity, LOOPING / FADING states, and instance-local STOP/FADE icons. No per-playback meters; master/bus meters remain at bottom right, capped at 144 logical pixels. Selected rows/cards use blue outlines; armed rows/buttons are yellow; interrupted rows differ from completed.
 - Show/Rehearse reuse a prepared silent stream across Edit transitions; voices still stop and disarm on exit. Automated callback tests confirm identical output between modes; physical Rehearse audibility requires retesting.
 - No global master control in the GUI. Software levels and routing are configured in Edit and locked in Show/Rehearse.
@@ -47,7 +47,7 @@ Deliberate route switches drop sounds and preserve independently armed cues; int
 - Multiple buses, mono routes, custom output-channel maps, and general combined backup feeds are configurable but not connected to playback. Those controls report unsupported status; playback/test confirmations are blocked rather than simulated.
 - Individual bus meters on combined backup remain unavailable. Intended ASIO/USB mixer compatibility is unverified.
 - Large-file bounded streaming and decoder packaging remain future backend work; AAC/M4A currently needs optional PyAV.
-- Current full suite: 360 tests passed. Automated tests and offscreen screen review are not hardware audibility, latency, reliability, or student usability verification.
+- Current full suite: 386 tests passed. Automated tests and offscreen screen review are not hardware audibility, latency, reliability, or student usability verification.
 
 ## Legacy loading
 
@@ -127,9 +127,12 @@ Each Playing card also has a **2s fade-and-complete** icon beside Stop and the c
 
 Import silently measures the decoded whole-source sample peak and counts samples near full scale. Inline Browse / Import and the Advanced Cue Editor show a nonblocking level warning after successful import for full-scale peaks (possible source clipping), little headroom (within 1 dB of full scale), or peaks that could exceed full scale with the current cue and selected bus levels. These are advisory, not import failures. Source peaks alone cannot prove distortion; whole-source estimates may overstate trimmed/faded playback peaks and cannot predict operator-timed overlapping sounds. Peak results persist with validation by file identity; older cached proofs acquire peak analysis on the next import without discarding the decoded cache.
 
-Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. The existing top logs button remains available.
+Edit now includes the shared Audio Health panel beside TEST progress/meters, including Diagnostics / Logs. It shows Idle without active playback, live load/clipping/dropout measurements during TEST, and output loss even when idle. Diagnostics / Logs is consolidated into the Edit System Status panel.
 
 The Playing card square Stop button now completes that playback immediately as a normal ending: Arm Next at End arms the successor; GO on End queues automatic GO on the already armed cue; Arm Next Now keeps its current armed cue. STOP ALL, internal Stop Previous/Stop All behavior, output loss, and configured interrupting fades retain their cancellation semantics.
 
 
 Stop and Fade cues now expose **Next Cue Action** in the Edit table and Advanced Cue Editor, and the Armed Cue summary shows the saved choice. **Arm Next Now** arms the successor immediately; **Arm Next at End** waits for the action to finish and then arms it; **GO on End** arms it immediately and automatically executes it after completion. Stop completes immediately. Fade waits for every playback it targeted to end; new playbacks started later are not part of that fade. A silent target or zero-duration Fade completes immediately. Manual GO/arming/navigation cancels the old automatic continuation; STOP ALL and output interruption still cancel it. Existing files keep their stored choice (normally Arm Next at End), with no format change.
+
+
+Edit now uses a compact **System Status / Cue Controls / Project & Navigation** dashboard. It hides after successful Rehearsal or Show entry and restores on return. All three cue-list views include a read-only **Duration** column showing the edited Play length (one pass for loops), Fade duration, or Immediate for stops. Source metadata loads asynchronously when needed; cue files and playback behavior are unchanged. See [Edit dashboard and cue duration](Documentation/EDIT-DASHBOARD.md).
